@@ -1,17 +1,16 @@
 <script lang="ts">
-	import { io, Socket } from "socket.io-client";
+	import { io, Socket } from 'socket.io-client';
 	import { onMount, onDestroy } from "svelte";
 
-	const socket: Socket = io("http://localhost:3001");
+	const socket: Socket = io('http://localhost:3001');
 
-	let inputMsg = ''
-
-	let messages: string[] = []
+	let inputMsg = '';
+	let messages: string[] = [];
 
 	onMount(async () => {
 		socket.connect();
 		socket.on('broadcastMessage', (msg) => {
-			messages = [...messages, msg ];
+			messages = [...messages, msg];
 		});
 	});
 
@@ -21,7 +20,7 @@
 
 	function sendMessage() {
 		socket.emit('message', inputMsg);
-		messages = [...messages, inputMsg ];
+		messages = [...messages, inputMsg];
 		inputMsg = '';
 	}
 </script>
