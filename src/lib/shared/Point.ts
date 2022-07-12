@@ -1,6 +1,7 @@
 export default class Point {
 	x: number;
 	y: number;
+
 	constructor(x = 0, y = 0) {
 		this.x = x;
 		this.y = y;
@@ -18,6 +19,7 @@ export default class Point {
 		return Math.sqrt(dx * dx + dy * dy);
 	}
 
+	// Pour recalibrer un point selon un offset
 	toRectSpace(rectangle: DOMRect): Point {
 		return new Point(this.x - rectangle.left, this.y - rectangle.top);
 	}
