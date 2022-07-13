@@ -1,4 +1,5 @@
 import Point from "./Point";
+import Global from "../shared/global";
 
 /*
 
@@ -38,13 +39,14 @@ export class BrushAction implements DrawAction {
 		this.size = size;
 		this.boundingRect = canvas.getBoundingClientRect();
 
+
 		// To create a point when there is only one click and no mousemove
 		this.path.push(point);
 		this.path.push(point);
 
 		canvas.addEventListener('mousemove', this.onMouseMove);
 		canvas.addEventListener('mouseup', this.onMouseUp);
-		canvas.addEventListener('mouseout', this.onMouseExit);
+		canvas.addEventListener('mouseleave', this.onMouseExit);
 	}
 
 	// When the mouse goes out of the canvas, we stop listening to events and stop tracing the path
@@ -62,12 +64,13 @@ export class BrushAction implements DrawAction {
 		if (this.path.length > 0 && this.path[this.path.length - 1].distanceSquared(point) < this.drawDistanceThreshold)
 			return;
 		this.path.push(point);
+		Global.socket.emit('updateBrush', {points: [point]});
 	}
 
 	stop(target: EventTarget) : void {
 		target.removeEventListener('mousemove', this.onMouseMove);
 		target.removeEventListener('mouseup', this.onMouseUp);
-		target.removeEventListener('mouseexit', this.onMouseExit);
+		target.removeEventListener('mouseleave', this.onMouseExit);
 	}
 
 	draw(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D): void {

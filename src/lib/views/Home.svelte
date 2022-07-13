@@ -1,25 +1,23 @@
 <script lang="ts">
-	import { io, Socket } from 'socket.io-client';
 	import { onMount, onDestroy } from "svelte";
-
-	const socket: Socket = io('http://localhost:3001');
+	import Global from "../shared/global";
 
 	let inputMsg = '';
 	let messages: string[] = [];
 
 	onMount(async () => {
-		socket.connect();
-		socket.on('broadcastMessage', (msg) => {
+		Global.socket.connect();
+		Global.socket.on('broadcastMessage', (msg) => {
 			messages = [...messages, msg];
 		});
 	});
 
 	onDestroy(async () => {
-		socket.disconnect();
+		Global.socket.disconnect();
 	});
 
 	function sendMessage() {
-		socket.emit('message', inputMsg);
+		Global.socket.emit('message', inputMsg);
 		messages = [...messages, inputMsg];
 		inputMsg = '';
 	}
