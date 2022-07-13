@@ -8,6 +8,7 @@
 	let ctx: CanvasRenderingContext2D;
 
 	const actions = new Map<number, DrawAction>();
+	let  sortedActions = []
 
 	let selectedColor = '#000000';
 	let brushSize = 3;
@@ -24,7 +25,9 @@
 		canvas.addEventListener('mousemove', onMouseMove);
 
 		Global.socket.on('createBrush', (data: any) => {
-			actions.set(data.action.id, new BrushAction(canvas, data.action.color, data.action.size, data.action.point));
+			actions.set(data.action.id, new BrushAction(canvas, data.action.color, data.action.size, data.action.point, { listenToEvents: false }));
+			sortedActions = [...actions.entries()].sort()
+			render();
 		});
 
 		Global.socket.on('updateBrush', (data: any) => {
@@ -45,6 +48,7 @@
 		const point = new Point(e.clientX, e.clientY).toRectSpace(canvas.getBoundingClientRect());
 
 		actions.set(actions.size - 1, new BrushAction(canvas, selectedColor, brushSize, point));
+		sortedActions = [...actions.entries()].sort()
 		Global.socket.emit('createBrush', { color: selectedColor, size: brushSize, point });
 
 		render();
@@ -58,7 +62,6 @@
 	function render(): void {
 		ctx.fillStyle = 'white';
 		ctx.fillRect(0, 0, canvas.width, canvas.height);
-		const sortedActions = [...actions.entries()].sort()
 		for (const entry of sortedActions) {
 			entry[1].draw(canvas, ctx);
 		}

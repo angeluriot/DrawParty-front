@@ -34,7 +34,7 @@ export class BrushAction implements DrawAction {
 	// Canvas' borders, it's used to calibrate mouse coordinates in the canvas
 	private boundingRect: DOMRect;
 
-	constructor(canvas: HTMLCanvasElement, color: string, size: number, point: Point) {
+	constructor(canvas: HTMLCanvasElement, color: string, size: number, point: Point, {listenToEvents = true} = {}) {
 		this.color = color;
 		this.size = size;
 		this.boundingRect = canvas.getBoundingClientRect();
@@ -44,9 +44,11 @@ export class BrushAction implements DrawAction {
 		this.path.push(point);
 		this.path.push(point);
 
-		canvas.addEventListener('mousemove', this.onMouseMove);
-		canvas.addEventListener('mouseup', this.onMouseUp);
-		canvas.addEventListener('mouseleave', this.onMouseExit);
+		if (listenToEvents) {
+			canvas.addEventListener('mousemove', this.onMouseMove);
+			canvas.addEventListener('mouseup', this.onMouseUp);
+			canvas.addEventListener('mouseleave', this.onMouseExit);
+		}
 	}
 
 	// When the mouse goes out of the canvas, we stop listening to events and stop tracing the path
