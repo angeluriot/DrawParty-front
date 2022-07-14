@@ -33,11 +33,16 @@ export class BrushAction implements DrawAction {
 
 	// Canvas' borders, it's used to calibrate mouse coordinates in the canvas
 	private boundingRect: DOMRect;
+	private canvas: HTMLCanvasElement;
+
+	private ctx: CanvasRenderingContext2D;
 
 	constructor(canvas: HTMLCanvasElement, color: string, size: number, point: Point, {listenToEvents = true} = {}) {
 		this.color = color;
 		this.size = size;
 		this.boundingRect = canvas.getBoundingClientRect();
+		this.canvas = canvas;
+		this.ctx = this.canvas.getContext('2d');
 
 
 		// To create a point when there is only one click and no mousemove
@@ -66,7 +71,8 @@ export class BrushAction implements DrawAction {
 		if (this.path.length > 0 && this.path[this.path.length - 1].distanceSquared(point) < this.drawDistanceThreshold)
 			return;
 		this.path.push(point);
-		Global.socket.emit('updateBrush', {points: [point]});
+		this.draw(this.canvas, this.ctx);
+		// Global.socket.emit('updateBrush', {points: [point]});
 	}
 
 	stop(target: EventTarget) : void {
