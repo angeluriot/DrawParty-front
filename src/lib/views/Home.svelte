@@ -6,14 +6,9 @@
 	let messages: string[] = [];
 
 	onMount(async () => {
-		Global.socket.connect();
 		Global.socket.on('broadcastMessage', (msg) => {
 			messages = [...messages, msg];
 		});
-	});
-
-	onDestroy(async () => {
-		Global.socket.disconnect();
 	});
 
 	function sendMessage() {

@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { onMount, onDestroy } from "svelte";
 import BrushPoint from "../shared/BrushLine";
-	import { DrawAction, BrushAction } from "../shared/DrawAction";
 	import Global from "../shared/global";
 	import Point from "../shared/Point";
+
+	const drawDistanceThreshold = 4
 
 	let canvas: HTMLCanvasElement;
 	let ctx: CanvasRenderingContext2D;
@@ -12,6 +13,9 @@ import BrushPoint from "../shared/BrushLine";
 	let drawing = false;
 	const actionsPerPlayer = new Map<string, number[]>();
 	const pointStack: BrushPoint[] = [];
+
+	const redoPerPlayer = new Map<string, number[]>();
+	const redoStack: BrushPoint[] = [];
 
 	let selectedColor = '#000000';
 	let brushSize = 3;
@@ -45,6 +49,18 @@ import BrushPoint from "../shared/BrushLine";
 				addPoint(data.requestedBy, point);
 		});
 
+		Global.socket.on('undo', (data: any) => {
+			if (!actionsPerPlayer.get(data.requestedBy))
+				return;
+			undo(data.requestedBy);
+		});
+
+		Global.socket.on('redo', (data: any) => {
+			if (!actionsPerPlayer.get(data.requestedBy))
+			return;
+			redo(data.requestedBy);
+		});
+
 		// Adds a point to the player's current action. It's called every 10 points placed on the client side
 		Global.socket.on('clearActions', (data: any) => {
 			clearActions(data.requestedBy);
@@ -55,13 +71,15 @@ import BrushPoint from "../shared/BrushLine";
 		if (!actionsPerPlayer.get(playerId))
 			actionsPerPlayer.set(playerId, []);
 		actionsPerPlayer.get(playerId).push(totalActions);
-		const brushPoint = new BrushPoint(totalActions++, point, selectedColor, brushSize);
+		const brushPoint = new BrushPoint(totalActions++, new Point(point.x, point.y), selectedColor, brushSize);
 		pointStack.push(brushPoint);
 		pointStack.push(brushPoint);
 		brushPoint.drawLine(ctx, brushPoint);
 	}
 
-	function addPoint(playerId: string, point: Point): void {
+	function addPoint(playerId: string, point: Point): boolean {
+		if (!actionsPerPlayer.get(playerId))
+			return false;
 		const currentAction = actionsPerPlayer.get(playerId).length - 1;
 		const pathId = actionsPerPlayer.get(playerId)[currentAction];
 		let lastPoint: BrushPoint = undefined;
@@ -72,10 +90,13 @@ import BrushPoint from "../shared/BrushLine";
 				break;
 			}
 		}
+		if (lastPoint && lastPoint.point.distanceSquared(point) < drawDistanceThreshold)
+			return false;
 
-		const brushPoint = new BrushPoint(pathId, point, lastPoint.color, lastPoint.brushSize);
+		const brushPoint = new BrushPoint(pathId, new Point(point.x, point.y), lastPoint.color, lastPoint.brushSize);
 		pointStack.push(brushPoint);
 		brushPoint.drawLine(ctx, lastPoint);
+		return true;
 	}
 
 	onDestroy(() => {
@@ -95,8 +116,8 @@ import BrushPoint from "../shared/BrushLine";
 		if (!drawing)
 			return;
 		const point = new Point(e.clientX, e.clientY).toRectSpace(canvas.getBoundingClientRect());
-		addPoint(Global.socket.id, point);
-		Global.socket.emit('updateBrush', {points: [point]});
+		if (addPoint(Global.socket.id, point))
+			Global.socket.emit('updateBrush', {points: [point]});
 	}
 
 	function stopDrawing(e: MouseEvent): void {
@@ -120,6 +141,45 @@ import BrushPoint from "../shared/BrushLine";
 		render();
 	}
 
+	function undo(playerId: string): void {
+		if (!actionsPerPlayer.get(playerId))
+			return;
+		const idToUndo = actionsPerPlayer.get(playerId).pop();
+		for (let i = 0; i < pointStack.length - 1; i++) {
+			if (pointStack[i].pathId == idToUndo) {
+				const removed = pointStack.splice(i--, 1);
+				redoStack.push(...removed);
+			}
+		}
+		if (!redoPerPlayer.get(playerId))
+			redoPerPlayer.set(playerId, []);
+		redoPerPlayer.get(playerId).push(idToUndo);
+		render();
+	}
+
+	function redo(playerId: string): void {
+		if (!redoPerPlayer.get(playerId))
+			return;
+		const idToRedo = redoPerPlayer.get(playerId).pop();
+		for (let i = 0; i < redoStack.length - 1; i++) {
+			if (redoStack[i].pathId == idToRedo) {
+				const removed = redoStack.splice(i--, 1);
+				pointStack.push(...removed);
+			}
+		}
+		render();
+	}
+
+	function undoButton(): void {
+		undo(Global.socket.id);
+		Global.socket.emit('undo');
+	}
+
+	function redoButton(): void {
+		redo(Global.socket.id);
+		Global.socket.emit('redo');
+	}
+
 	function render() {
 		drawBackground();
 		const lastPointPerGroup = new Map<number, number>();
@@ -138,6 +198,8 @@ import BrushPoint from "../shared/BrushLine";
 	<span>Brush size : {brushSize}</span>
 	<input type="range" min="1" max="30" bind:value={brushSize}>
 	<button on:click={clearButton}>Clear</button>
+	<button on:click={undoButton}>Undo</button>
+	<button on:click={redoButton}>Redo</button>
 </section>
 
 <style>

@@ -1,6 +1,14 @@
 <script lang="ts">
+import { onDestroy } from 'svelte';
+
 	import Router from 'svelte-spa-router';
+	import Global from './lib/shared/global';
 	import {routes} from './routes.js';
+
+	onDestroy(() => {
+		if (Global.socket.connected)
+			Global.socket.disconnect();
+	})
 </script>
 
 <body>
