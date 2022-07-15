@@ -120,7 +120,7 @@
 				render();
 		});
 
-		// Adds a point to the player's current action. It's called every 10 points placed on the client side
+		// Clears all of a player's actions
 		Global.socket.on('clearActions', (data: any) => {
 			clearActions(data.requestedBy);
 		});
