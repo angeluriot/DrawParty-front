@@ -20,7 +20,7 @@ export default class Point {
 	}
 
 	// Pour recalibrer un point selon un offset
-	toRectSpace(rectangle: DOMRect): Point {
-		return new Point(this.x - rectangle.left, this.y - rectangle.top);
+	toRectSpace(rect: DOMRect): Point {
+		return new Point((this.x - rect.left) / rect.width, (this.y - rect.top) / rect.height);
 	}
 }

@@ -17,15 +17,16 @@
 	*/
 `
 	import { onMount, onDestroy } from "svelte";
-	import BrushPoint from "../shared/BrushLine";
+	import BrushPoint from "../shared/BrushPoint";
 	import Global from "../shared/global";
 	import Point from "../shared/Point";
+	import Action from "../shared/Action";
 
 	/*
-	The minimum distance in pixels^2 between two points of a path
+	The minimum normalized distance between two points of a path
 	it is used to prevent small paths from having too many points
 	*/
-	const drawDistanceThreshold = 4
+	const drawDistanceThreshold = 0.000006
 
 	let canvas: HTMLCanvasElement;
 	let ctx: CanvasRenderingContext2D;
@@ -42,8 +43,8 @@
 	let drawing = false;
 	let selectedColor = '#000000';
 	let brushSize = 3;
-	// This is the list of all current points that hasn't been confirmed by the server yet
-	const localPointStack: BrushPoint[] = [];
+	// This is the list of all current actions that hasn't been confirmed by the server yet
+	const localActionStack: Action[] = [];
 
 	// Server
 
@@ -55,7 +56,7 @@
 	*/
 	const serverActionsPerPlayer = new Map<string, number[]>();
 	// Same as localPointStack but for confirmed actions
-	const serverActions: BrushPoint[] = [];
+	const serverActions: Action[] = [];
 
 	function drawBackground() {
 		ctx.fillStyle = '#ffffff';
@@ -70,10 +71,9 @@
 
 		drawBackground();
 
-		document.addEventListener('mousedown', onMouseDown);
-		canvas.addEventListener('mouseenter', onMouseEnter);
+		canvas.addEventListener('mousedown', onMouseDown);
 		canvas.addEventListener('mousemove', onMouseMove);
-		document.addEventListener('mouseup', stopDrawing);
+		canvas.addEventListener('mouseup', stopDrawing);
 
 		// Triggered every server tick
 		Global.socket.on('serverUpdate', (data: any) => {
@@ -84,17 +84,18 @@
 				This allows to splice the first element of the local (unconfirmed) list every time we encounter an action of the local player
 				*/
 				if (action.requestedBy == Global.socket.id)
-					localPointStack.splice(0, 1);
+					localActionStack.splice(0, 1);
 
 				// Creates a new brush path
 				if (action.type == 'createBrush') {
 					if (!serverActionsPerPlayer.get(action.requestedBy))
 						serverActionsPerPlayer.set(action.requestedBy, [])
 					serverActionsPerPlayer.get(action.requestedBy).push(serverTotalActions);
-					const brushPoint = new BrushPoint(serverTotalActions++, new Point(action.data.point.x, action.data.point.y), action.data.color, action.data.size);
+					const brushPoint = new BrushPoint(new Point(action.data.point.x, action.data.point.y), action.data.color, action.data.size);
+					const savedAction = new Action('brushPoint', brushPoint, serverTotalActions++);
 					// Twice because we need two points to make a point if the player clicks without moving
-					serverActions.push(brushPoint);
-					serverActions.push(brushPoint);
+					serverActions.push(savedAction);
+					serverActions.push(savedAction);
 				}
 				// Adds a point to the current path of the action's player
 				else if (action.type == 'updateBrush') {
@@ -106,13 +107,27 @@
 						let lastPoint: BrushPoint = undefined;
 						// findLast and findLastIndex are not compatible with firefox
 						for (let i = serverActions.length - 1; i >= 0; i--) {
-							if (lastAction == serverActions[i].pathId) {
-								lastPoint = serverActions[i];
+							if (lastAction == serverActions[i].id) {
+								lastPoint = serverActions[i].data;
 								break;
 							}
 						}
-						const brushPoint = new BrushPoint(lastAction, new Point(point.x, point.y), lastPoint.color, lastPoint.brushSize);
-						serverActions.push(brushPoint);
+						const brushPoint = new BrushPoint(new Point(point.x, point.y), lastPoint.color, lastPoint.brushSize);
+						serverActions.push(new Action('brushPoint', brushPoint, lastAction));
+					}
+				}
+				else if (action.type == 'undo') {
+					if (!serverActionsPerPlayer.get(action.requestedBy))
+						return;
+					let pathId = -1;
+					for (let i = serverActions.length - 1; i >= 0; i--)
+					{
+						if (pathId == -1 && serverActionsPerPlayer.get(action.requestedBy).indexOf(serverActions[i].id) != -1 && !serverActions[i].undone) {
+							pathId = serverActions[i].id;
+							serverActions[i].undone = true;
+						} else if (pathId == serverActions[i].id) {
+							serverActions[i].undone = true;
+						}
 					}
 				}
 			}
@@ -127,49 +142,50 @@
 	});
 
 	function createBrush(playerId: string, point: Point, selectedColor: string, brushSize: number, ctx: CanvasRenderingContext2D): void {
-		const brushPoint = new BrushPoint(totalActions++, new Point(point.x, point.y), selectedColor, brushSize);
-		localPointStack.push(brushPoint);
-		localPointStack.push(brushPoint);
-		brushPoint.drawLine(ctx, brushPoint);
+		const brushPoint = new BrushPoint(new Point(point.x, point.y), selectedColor, brushSize);
+		const action = new Action('brushPoint', brushPoint, totalActions++);
+		localActionStack.push(action);
+		localActionStack.push(action);
+		brushPoint.drawLine(canvas, ctx, brushPoint);
 	}
 
 	function addPoint(playerId: string, point: Point): boolean {
 		let lastPoint: BrushPoint = undefined;
-		if (localPointStack.length > 0)
-			lastPoint = localPointStack[localPointStack.length - 1];
-		else {
-			const lastPathId = serverActionsPerPlayer.get(Global.socket.id)[serverActionsPerPlayer.get(Global.socket.id).length - 1];
+		let pathId = 0;
+		if (localActionStack.length > 0) {
+			lastPoint = localActionStack[localActionStack.length - 1].data;
+			pathId = localActionStack[localActionStack.length - 1].id;
+		} else {
+			pathId = serverActionsPerPlayer.get(Global.socket.id)[serverActionsPerPlayer.get(Global.socket.id).length - 1];
 			// findLast and findLastIndex are not compatible with firefox
 			for (let i = serverActions.length - 1; i >= 0; i--) {
-				if (lastPathId == serverActions[i].pathId) {
-					lastPoint = serverActions[i];
+				if (pathId == serverActions[i].id) {
+					lastPoint = serverActions[i].data;
 					break;
 				}
 			}
 		}
-		const pathId = lastPoint.pathId;
 		if (lastPoint && lastPoint.point.distanceSquared(point) < drawDistanceThreshold)
-			return false;
+		return false;
 
-		const brushPoint = new BrushPoint(pathId, new Point(point.x, point.y), lastPoint.color, lastPoint.brushSize);
-		localPointStack.push(brushPoint);
-		brushPoint.drawLine(ctx, lastPoint);
+		const brushPoint = new BrushPoint(new Point(point.x, point.y), lastPoint.color, lastPoint.brushSize);
+		localActionStack.push(new Action('brushPoint', brushPoint, pathId));
+		brushPoint.drawLine(canvas, ctx, lastPoint);
 		return true;
 	}
 
 	onDestroy(() => {
-		document.removeEventListener('mousedown', onMouseDown);
+		canvas.removeEventListener('mousedown', onMouseDown);
 		canvas.removeEventListener('mouseenter', onMouseEnter);
 		canvas.removeEventListener('mousemove', onMouseMove);
-		document.removeEventListener('mouseup', stopDrawing);
-		document.removeEventListener('mouseleave', onMouseLeave);
-
+		canvas.removeEventListener('mouseup', stopDrawing);
+		canvas.removeEventListener('mouseleave', onMouseLeave);
 	})
 
 	function onMouseLeave(e: MouseEvent) {
 		const distance = Math.sqrt(e.movementX * e.movementX + e.movementY * e.movementY);
 		const angle = Math.atan2(e.movementY, e.movementX);
-		const point = new Point(e.clientX - Math.cos(angle) * distance, e.clientY - Math.sin(angle) * distance).toRectSpace(canvas.getBoundingClientRect());
+		const point = new Point(e.clientX - Math.cos(angle) * distance, e.clientY - Math.sin(angle) * distance).toRectSpace(canvas.getBoundingClientRect())
 		point.x = Math.max(0, Math.min(point.x, canvas.width));
 		point.y = Math.max(0, Math.min(point.y, canvas.height));
 
@@ -216,29 +232,41 @@
 
 	function clearActions(playerId: string): void {
 		if (playerId == Global.socket.id)
-			localPointStack.length = 0;
+			localActionStack.length = 0;
 		if (!serverActionsPerPlayer.get(playerId))
 			return;
 		const pathIds = serverActionsPerPlayer.get(playerId);
 		for (let i = 0; i < serverActions.length - 1; i++) {
-			if (pathIds.indexOf(serverActions[i].pathId) != -1)
+			if (pathIds.indexOf(serverActions[i].id) != -1)
 				serverActions.splice(i--, 1);
 		}
 	}
 
-	function undo(playerId: string): void {
+	function undo(): void {
+		let pathId = -1;
+		console.log(localActionStack.length);
+		for (let i = localActionStack.length - 1; i >= 0; i--)
+		{
+			if (pathId == -1 && !localActionStack[i].undone) {
+				pathId = localActionStack[i].id;
+				localActionStack[i].undone = true;
+			} else if (pathId == localActionStack[i].id) {
+				localActionStack[i].undone = true;
+			}
+		}
+		render();
 	}
 
-	function redo(playerId: string): void {
+	function redo(): void {
 	}
 
 	function undoButton(): void {
-		undo(Global.socket.id);
+		undo();
 		Global.socket.emit('undo');
 	}
 
 	function redoButton(): void {
-		redo(Global.socket.id);
+		redo();
 		Global.socket.emit('redo');
 	}
 
@@ -248,17 +276,17 @@
 		// Render server actions
 		const serverLastPointPerGroup = new Map<number, number>();
 		for (let i = 0; i < serverActions.length; i++) {
-			if (serverLastPointPerGroup.get(serverActions[i].pathId))
-				serverActions[i].drawLine(ctx, serverActions[serverLastPointPerGroup.get(serverActions[i].pathId)]);
-			serverLastPointPerGroup.set(serverActions[i].pathId, i);
+			if (serverLastPointPerGroup.get(serverActions[i].id) && !serverActions[i].undone)
+				serverActions[i].data.drawLine(canvas, ctx, serverActions[serverLastPointPerGroup.get(serverActions[i].id)].data);
+			serverLastPointPerGroup.set(serverActions[i].id, i);
 		}
 
 		// Render client local actions that server hasn't saved yet
 		const lastPointPerGroup = new Map<number, number>();
-		for (let i = 0; i < localPointStack.length; i++) {
-			if (lastPointPerGroup.get(localPointStack[i].pathId))
-				localPointStack[i].drawLine(ctx, localPointStack[lastPointPerGroup.get(localPointStack[i].pathId)]);
-			lastPointPerGroup.set(localPointStack[i].pathId, i);
+		for (let i = 0; i < localActionStack.length; i++) {
+			if (lastPointPerGroup.get(localActionStack[i].id) && !localActionStack[i].undone)
+				localActionStack[i].data.drawLine(canvas, ctx, localActionStack[lastPointPerGroup.get(localActionStack[i].id)].data);
+			lastPointPerGroup.set(localActionStack[i].id, i);
 		}
 	}
 </script>
