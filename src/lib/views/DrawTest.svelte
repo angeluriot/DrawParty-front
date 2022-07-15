@@ -45,6 +45,7 @@
 	let brushSize = 3;
 	// This is the list of all current actions that hasn't been confirmed by the server yet
 	const localActionStack: Action[] = [];
+	const localUndos: number[] = [];
 
 	// Server
 
@@ -57,6 +58,7 @@
 	const serverActionsPerPlayer = new Map<string, number[]>();
 	// Same as localPointStack but for confirmed actions
 	const serverActions: Action[] = [];
+	const serverUndosPerPlayer = new Map<string, number[]>();
 
 	function drawBackground() {
 		ctx.fillStyle = '#ffffff';
@@ -85,6 +87,14 @@
 				*/
 				if (action.requestedBy == Global.socket.id)
 					localActionStack.splice(0, 1);
+
+				if (action.type != 'undo' && action.type != 'redo' && action.type != 'updateBrush' && serverUndosPerPlayer.get(action.requestedBy)) {
+					const ids = serverUndosPerPlayer.get(action.requestedBy);
+					for (let i = 0; i < serverActions.length; i++)
+						if (ids.indexOf(serverActions[i].id) != -1)
+							serverActions.splice(i, 1);
+					serverUndosPerPlayer.delete(action.requestedBy);
+				}
 
 				// Creates a new brush path
 				if (action.type == 'createBrush') {
@@ -123,12 +133,34 @@
 					for (let i = serverActions.length - 1; i >= 0; i--)
 					{
 						if (pathId == -1 && serverActionsPerPlayer.get(action.requestedBy).indexOf(serverActions[i].id) != -1 && !serverActions[i].undone) {
+							if (!serverUndosPerPlayer.get(action.requestedBy))
+								serverUndosPerPlayer.set(action.requestedBy, []);
 							pathId = serverActions[i].id;
+							serverUndosPerPlayer.get(action.requestedBy).push(pathId);
 							serverActions[i].undone = true;
 						} else if (pathId == serverActions[i].id) {
 							serverActions[i].undone = true;
 						}
 					}
+				}
+				else if (action.type == 'redo') {
+					if (!serverActionsPerPlayer.get(action.requestedBy) || !serverUndosPerPlayer.get(action.requestedBy))
+						return;
+					let pathId = -1;
+					const ids = serverUndosPerPlayer.get(action.requestedBy);
+					for (let i = 0; i < serverActions.length - 1; i++)
+					{
+						if (pathId == -1 && ids.indexOf(serverActions[i].id) != -1) {
+							pathId = serverActions[i].id;
+							serverActions[i].undone = false;
+						} else if (pathId == serverActions[i].id) {
+							serverActions[i].undone = false;
+						}
+					}
+					if (ids.length == 1)
+						serverUndosPerPlayer.delete(action.requestedBy);
+					else
+						serverUndosPerPlayer.get(action.requestedBy).pop();
 				}
 			}
 			if (data.length > 0)
@@ -141,7 +173,15 @@
 		});
 	});
 
+	function clearUndoStack() {
+		for (let i = 0; i < serverActions.length; i++)
+			if (localUndos.indexOf(serverActions[i].id) != -1)
+				serverActions.splice(i, 1);
+		localUndos.length = 0;
+	}
+
 	function createBrush(playerId: string, point: Point, selectedColor: string, brushSize: number, ctx: CanvasRenderingContext2D): void {
+		clearUndoStack();
 		const brushPoint = new BrushPoint(new Point(point.x, point.y), selectedColor, brushSize);
 		const action = new Action('brushPoint', brushPoint, totalActions++);
 		localActionStack.push(action);
@@ -232,7 +272,12 @@
 
 	function clearActions(playerId: string): void {
 		if (playerId == Global.socket.id)
+		{
 			localActionStack.length = 0;
+			localUndos.length = 0;
+			render();
+			return;
+		}
 		if (!serverActionsPerPlayer.get(playerId))
 			return;
 		const pathIds = serverActionsPerPlayer.get(playerId);
@@ -244,11 +289,11 @@
 
 	function undo(): void {
 		let pathId = -1;
-		console.log(localActionStack.length);
 		for (let i = localActionStack.length - 1; i >= 0; i--)
 		{
 			if (pathId == -1 && !localActionStack[i].undone) {
 				pathId = localActionStack[i].id;
+				localUndos.push(pathId);
 				localActionStack[i].undone = true;
 			} else if (pathId == localActionStack[i].id) {
 				localActionStack[i].undone = true;
@@ -258,6 +303,20 @@
 	}
 
 	function redo(): void {
+		if (localUndos.length == 0)
+			return;
+		let pathId = -1;
+		for (let i = 0; i < localActionStack.length ; i++)
+		{
+			if (pathId == -1 && localActionStack[i].undone) {
+				pathId = localActionStack[i].id;
+				localActionStack[i].undone = false;
+			} else if (pathId == localActionStack[i].id) {
+				localActionStack[i].undone = false;
+			}
+		}
+		localUndos.pop();
+		render();
 	}
 
 	function undoButton(): void {
