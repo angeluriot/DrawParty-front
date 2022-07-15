@@ -9,16 +9,17 @@ import BrushPoint from "../shared/BrushLine";
 	let canvas: HTMLCanvasElement;
 	let ctx: CanvasRenderingContext2D;
 
+	// Local
 	let totalActions = 0;
 	let drawing = false;
-	const actionsPerPlayer = new Map<string, number[]>();
-	const pointStack: BrushPoint[] = [];
-
-	const redoPerPlayer = new Map<string, number[]>();
-	const redoStack: BrushPoint[] = [];
-
 	let selectedColor = '#000000';
 	let brushSize = 3;
+	const localPointStack: BrushPoint[] = [];
+
+	// Server
+	let serverTotalActions = 0;
+	const serverActionsPerPlayer = new Map<string, number[]>();
+	const serverActions: BrushPoint[] = [];
 
 	function drawBackground() {
 		ctx.fillStyle = '#ffffff';
@@ -38,27 +39,39 @@ import BrushPoint from "../shared/BrushLine";
 		canvas.addEventListener('mouseleave', stopDrawing);
 		canvas.addEventListener('mouseup', stopDrawing);
 
-		Global.socket.on('createBrush', (data: any) => {
-			createBrush(data.requestedBy, data.action.point, data.action.color, data.action.size, ctx);
-		});
+		Global.socket.on('serverUpdate', (data: any) => {
+			for (const action of data) {
+				if (action.requestedBy == Global.socket.id)
+					localPointStack.splice(0, 1);
 
-		Global.socket.on('updateBrush', (data: any) => {
-			if (!actionsPerPlayer.get(data.requestedBy))
-				return;
-			for (const point of data.points)
-				addPoint(data.requestedBy, point);
-		});
-
-		Global.socket.on('undo', (data: any) => {
-			if (!actionsPerPlayer.get(data.requestedBy))
-				return;
-			undo(data.requestedBy);
-		});
-
-		Global.socket.on('redo', (data: any) => {
-			if (!actionsPerPlayer.get(data.requestedBy))
-			return;
-			redo(data.requestedBy);
+				if (action.type == 'createBrush') {
+					if (!serverActionsPerPlayer.get(action.requestedBy))
+						serverActionsPerPlayer.set(action.requestedBy, [])
+					serverActionsPerPlayer.get(action.requestedBy).push(serverTotalActions);
+					const brushPoint = new BrushPoint(serverTotalActions++, new Point(action.data.point.x, action.data.point.y), action.data.color, action.data.size);
+					serverActions.push(brushPoint);
+					serverActions.push(brushPoint);
+				}
+				else if (action.type == 'updateBrush') {
+					if (!serverActionsPerPlayer.get(action.requestedBy))
+						continue
+					for (const point of action.data) {
+						const lastAction = serverActionsPerPlayer.get(action.requestedBy)[serverActionsPerPlayer.get(action.requestedBy).length - 1];
+						let lastPoint: BrushPoint = undefined;
+						// findLast and findLastIndex are not compatible with firefox
+						for (let i = serverActions.length - 2; i >= 0; i--) {
+							if (lastAction == serverActions[i].pathId) {
+								lastPoint = serverActions[i];
+								break;
+							}
+						}
+						const brushPoint = new BrushPoint(lastAction, new Point(point.x, point.y), lastPoint.color, lastPoint.brushSize);
+						serverActions.push(brushPoint);
+					}
+				}
+			}
+			if (data.length > 0)
+				render();
 		});
 
 		// Adds a point to the player's current action. It's called every 10 points placed on the client side
@@ -68,33 +81,32 @@ import BrushPoint from "../shared/BrushLine";
 	});
 
 	function createBrush(playerId: string, point: Point, selectedColor: string, brushSize: number, ctx: CanvasRenderingContext2D): void {
-		if (!actionsPerPlayer.get(playerId))
-			actionsPerPlayer.set(playerId, []);
-		actionsPerPlayer.get(playerId).push(totalActions);
 		const brushPoint = new BrushPoint(totalActions++, new Point(point.x, point.y), selectedColor, brushSize);
-		pointStack.push(brushPoint);
-		pointStack.push(brushPoint);
+		localPointStack.push(brushPoint);
+		localPointStack.push(brushPoint);
 		brushPoint.drawLine(ctx, brushPoint);
 	}
 
 	function addPoint(playerId: string, point: Point): boolean {
-		if (!actionsPerPlayer.get(playerId))
-			return false;
-		const currentAction = actionsPerPlayer.get(playerId).length - 1;
-		const pathId = actionsPerPlayer.get(playerId)[currentAction];
 		let lastPoint: BrushPoint = undefined;
-		// findLast and findLastIndex are not compatible with firefox
-		for (let i = pointStack.length - 2; i >= 0; i--) {
-			if (pathId == pointStack[i].pathId) {
-				lastPoint = pointStack[i];
-				break;
+		if (localPointStack.length > 0)
+			lastPoint = localPointStack[localPointStack.length - 1];
+		else {
+			const lastPathId = serverActionsPerPlayer.get(Global.socket.id)[serverActionsPerPlayer.get(Global.socket.id).length - 1];
+			// findLast and findLastIndex are not compatible with firefox
+			for (let i = serverActions.length - 2; i >= 0; i--) {
+				if (lastPathId == serverActions[i].pathId) {
+					lastPoint = serverActions[i];
+					break;
+				}
 			}
 		}
+		const pathId = lastPoint.pathId;
 		if (lastPoint && lastPoint.point.distanceSquared(point) < drawDistanceThreshold)
 			return false;
 
 		const brushPoint = new BrushPoint(pathId, new Point(point.x, point.y), lastPoint.color, lastPoint.brushSize);
-		pointStack.push(brushPoint);
+		localPointStack.push(brushPoint);
 		brushPoint.drawLine(ctx, lastPoint);
 		return true;
 	}
@@ -130,44 +142,21 @@ import BrushPoint from "../shared/BrushLine";
 	}
 
 	function clearActions(playerId: string): void {
-		if (!actionsPerPlayer.get(playerId))
+		if (playerId == Global.socket.id)
+			localPointStack.length = 0;
+		if (!serverActionsPerPlayer.get(playerId))
 			return;
-		for (let i = 0; i < pointStack.length; i++) {
-			if (actionsPerPlayer.get(playerId).indexOf(pointStack[i].pathId) != -1) {
-				pointStack.splice(i--, 1);
-			}
+		const pathIds = serverActionsPerPlayer.get(playerId);
+		for (let i = 0; i < serverActions.length - 1; i++) {
+			if (pathIds.indexOf(serverActions[i].pathId) != -1)
+				serverActions.splice(i--, 1);
 		}
-		actionsPerPlayer.delete(playerId);
-		render();
 	}
 
 	function undo(playerId: string): void {
-		if (!actionsPerPlayer.get(playerId))
-			return;
-		const idToUndo = actionsPerPlayer.get(playerId).pop();
-		for (let i = 0; i < pointStack.length - 1; i++) {
-			if (pointStack[i].pathId == idToUndo) {
-				const removed = pointStack.splice(i--, 1);
-				redoStack.push(...removed);
-			}
-		}
-		if (!redoPerPlayer.get(playerId))
-			redoPerPlayer.set(playerId, []);
-		redoPerPlayer.get(playerId).push(idToUndo);
-		render();
 	}
 
 	function redo(playerId: string): void {
-		if (!redoPerPlayer.get(playerId))
-			return;
-		const idToRedo = redoPerPlayer.get(playerId).pop();
-		for (let i = 0; i < redoStack.length - 1; i++) {
-			if (redoStack[i].pathId == idToRedo) {
-				const removed = redoStack.splice(i--, 1);
-				pointStack.push(...removed);
-			}
-		}
-		render();
 	}
 
 	function undoButton(): void {
@@ -182,12 +171,21 @@ import BrushPoint from "../shared/BrushLine";
 
 	function render() {
 		drawBackground();
+
+		// Render server actions
+		const serverLastPointPerGroup = new Map<number, number>();
+		for (let i = 0; i < serverActions.length; i++) {
+			if (serverLastPointPerGroup.get(serverActions[i].pathId))
+				serverActions[i].drawLine(ctx, serverActions[serverLastPointPerGroup.get(serverActions[i].pathId)]);
+			serverLastPointPerGroup.set(serverActions[i].pathId, i);
+		}
+
+		// Render client local actions that server hasn't saved yet
 		const lastPointPerGroup = new Map<number, number>();
-		for (let i = 0; i < pointStack.length; i++) {
-			if (lastPointPerGroup.get(pointStack[i].pathId)) {
-				pointStack[i].drawLine(ctx, pointStack[lastPointPerGroup.get(pointStack[i].pathId)]);
-			}
-			lastPointPerGroup.set(pointStack[i].pathId, i);
+		for (let i = 0; i < localPointStack.length; i++) {
+			if (lastPointPerGroup.get(localPointStack[i].pathId))
+				localPointStack[i].drawLine(ctx, localPointStack[lastPointPerGroup.get(localPointStack[i].pathId)]);
+			lastPointPerGroup.set(localPointStack[i].pathId, i);
 		}
 	}
 </script>
