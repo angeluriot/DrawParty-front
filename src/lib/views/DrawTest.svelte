@@ -1,24 +1,60 @@
-<script lang="ts">
+<script lang="ts">`
+	/*
+	The algorithm works with two separate lists,
+	one representing the actions confirmed by the server and
+	one representing local changes that aren't confirmed yet.
+	Local actions are drawn over server ones.
+
+	An action is confirmed when it appears in a 'serverUpdate' socket.io event.
+
+	An action is currently just a point with an id representing the path to which the point belongs.
+
+	The server can send different actions during the 'serverUpdate' event :
+	- createBrush, creates the first points of a new path
+	- updateBrush, add points to the current path of the action's player
+
+	The clear action is handled in its own socket.io event 'clearActions'
+	*/
+`
 	import { onMount, onDestroy } from "svelte";
-import BrushPoint from "../shared/BrushLine";
+	import BrushPoint from "../shared/BrushLine";
 	import Global from "../shared/global";
 	import Point from "../shared/Point";
 
+	/*
+	The minimum distance in pixels^2 between two points of a path
+	it is used to prevent small paths from having too many points
+	*/
 	const drawDistanceThreshold = 4
 
 	let canvas: HTMLCanvasElement;
 	let ctx: CanvasRenderingContext2D;
 
 	// Local
+
+	/*
+	The current amount of local actions (creating a path, filling, ...).
+	It is used to create group ids for actions, in the case an action is dependant of an other
+	(like updatePath that adds a point to an already existing action)
+	When undoing, all the actions with a certain id are deleted. This is how we remove all points of a path
+	*/
 	let totalActions = 0;
 	let drawing = false;
 	let selectedColor = '#000000';
 	let brushSize = 3;
+	// This is the list of all current points that hasn't been confirmed by the server yet
 	const localPointStack: BrushPoint[] = [];
 
 	// Server
+
+	// Same as totalActions but increments only for confirmed actions, of any player
 	let serverTotalActions = 0;
+	/*
+	List of action group ids per player, it is used to keep track of which path is owned by a player, etc.
+	Therefore allowing to do things on an action group based on a player id
+	*/
 	const serverActionsPerPlayer = new Map<string, number[]>();
+	// Same as localPointStack but for confirmed actions
 	const serverActions: BrushPoint[] = [];
 
 	function drawBackground() {
@@ -34,32 +70,42 @@ import BrushPoint from "../shared/BrushLine";
 
 		drawBackground();
 
-		canvas.addEventListener('mousedown', onMouseDown);
+		document.addEventListener('mousedown', onMouseDown);
+		canvas.addEventListener('mouseenter', onMouseEnter);
 		canvas.addEventListener('mousemove', onMouseMove);
-		canvas.addEventListener('mouseleave', stopDrawing);
-		canvas.addEventListener('mouseup', stopDrawing);
+		document.addEventListener('mouseup', stopDrawing);
 
+		// Triggered every server tick
 		Global.socket.on('serverUpdate', (data: any) => {
 			for (const action of data) {
+				/*
+				Since websockets preserve order, players' server-side actions and local actions are in the same order
+				Therefore, the nth action of the server action list is the nth action of the local player.
+				This allows to splice the first element of the local (unconfirmed) list every time we encounter an action of the local player
+				*/
 				if (action.requestedBy == Global.socket.id)
 					localPointStack.splice(0, 1);
 
+				// Creates a new brush path
 				if (action.type == 'createBrush') {
 					if (!serverActionsPerPlayer.get(action.requestedBy))
 						serverActionsPerPlayer.set(action.requestedBy, [])
 					serverActionsPerPlayer.get(action.requestedBy).push(serverTotalActions);
 					const brushPoint = new BrushPoint(serverTotalActions++, new Point(action.data.point.x, action.data.point.y), action.data.color, action.data.size);
+					// Twice because we need two points to make a point if the player clicks without moving
 					serverActions.push(brushPoint);
 					serverActions.push(brushPoint);
 				}
+				// Adds a point to the current path of the action's player
 				else if (action.type == 'updateBrush') {
 					if (!serverActionsPerPlayer.get(action.requestedBy))
 						continue
 					for (const point of action.data) {
+						// We use the last point to determine the size and the color of the brush
 						const lastAction = serverActionsPerPlayer.get(action.requestedBy)[serverActionsPerPlayer.get(action.requestedBy).length - 1];
 						let lastPoint: BrushPoint = undefined;
 						// findLast and findLastIndex are not compatible with firefox
-						for (let i = serverActions.length - 2; i >= 0; i--) {
+						for (let i = serverActions.length - 1; i >= 0; i--) {
 							if (lastAction == serverActions[i].pathId) {
 								lastPoint = serverActions[i];
 								break;
@@ -94,7 +140,7 @@ import BrushPoint from "../shared/BrushLine";
 		else {
 			const lastPathId = serverActionsPerPlayer.get(Global.socket.id)[serverActionsPerPlayer.get(Global.socket.id).length - 1];
 			// findLast and findLastIndex are not compatible with firefox
-			for (let i = serverActions.length - 2; i >= 0; i--) {
+			for (let i = serverActions.length - 1; i >= 0; i--) {
 				if (lastPathId == serverActions[i].pathId) {
 					lastPoint = serverActions[i];
 					break;
@@ -112,12 +158,39 @@ import BrushPoint from "../shared/BrushLine";
 	}
 
 	onDestroy(() => {
-		canvas.removeEventListener('mousedown', onMouseDown)
+		document.removeEventListener('mousedown', onMouseDown);
+		canvas.removeEventListener('mouseenter', onMouseEnter);
+		canvas.removeEventListener('mousemove', onMouseMove);
+		document.removeEventListener('mouseup', stopDrawing);
+		document.removeEventListener('mouseleave', onMouseLeave);
+
 	})
 
-	function onMouseDown(e: MouseEvent): void {
-		if (e.clientY <= 0 || e.clientX <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight)
+	function onMouseLeave(e: MouseEvent) {
+		const distance = Math.sqrt(e.movementX * e.movementX + e.movementY * e.movementY);
+		const angle = Math.atan2(e.movementY, e.movementX);
+		const point = new Point(e.clientX - Math.cos(angle) * distance, e.clientY - Math.sin(angle) * distance).toRectSpace(canvas.getBoundingClientRect());
+		point.x = Math.max(0, Math.min(point.x, canvas.width));
+		point.y = Math.max(0, Math.min(point.y, canvas.height));
+
+		Global.socket.emit('updateBrush', {points: [point]});
+		stopDrawing(e);
+	}
+
+	function onMouseEnter(e: MouseEvent): void {
+		if (!drawing)
 			return;
+		const distance = Math.sqrt(e.movementX * e.movementX + e.movementY * e.movementY);
+		const angle = Math.atan2(e.movementY, e.movementX);
+		const point = new Point(e.clientX - Math.cos(angle) * distance, e.clientY - Math.sin(angle) * distance).toRectSpace(canvas.getBoundingClientRect());
+		point.x = Math.max(0, Math.min(point.x, canvas.width));
+		point.y = Math.max(0, Math.min(point.y, canvas.height));
+
+		createBrush(Global.socket.id, point, selectedColor, brushSize, ctx);
+		Global.socket.emit('createBrush', { color: selectedColor, size: brushSize, point });
+	}
+
+	function onMouseDown(e: MouseEvent): void {
 		const point = new Point(e.clientX, e.clientY).toRectSpace(canvas.getBoundingClientRect());
 		createBrush(Global.socket.id, point, selectedColor, brushSize, ctx);
 		Global.socket.emit('createBrush', { color: selectedColor, size: brushSize, point });
