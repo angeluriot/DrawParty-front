@@ -39,6 +39,7 @@
 	(like updatePath that adds a point to an already existing action)
 	When undoing, all the actions with a certain id are deleted. This is how we remove all points of a path
 	*/
+	let selectedTool: string = 'brush';
 	let totalActions = 0;
 	let drawing = false;
 	let selectedColor = '#000000';
@@ -59,6 +60,14 @@
 	// Same as localPointStack but for confirmed actions
 	const serverActions: Action[] = [];
 	const serverUndosPerPlayer = new Map<string, number[]>();
+
+	function selectBrush() {
+		selectedTool = 'brush';
+	}
+
+	function selectEraser() {
+		selectedTool = 'eraser';
+	}
 
 	function drawBackground() {
 		ctx.fillStyle = '#ffffff';
@@ -101,7 +110,7 @@
 					if (!serverActionsPerPlayer.get(action.requestedBy))
 						serverActionsPerPlayer.set(action.requestedBy, [])
 					serverActionsPerPlayer.get(action.requestedBy).push(serverTotalActions);
-					const brushPoint = new BrushPoint(new Point(action.data.point.x, action.data.point.y), action.data.color, action.data.size);
+					const brushPoint = new BrushPoint(new Point(action.data.point.x, action.data.point.y), action.data.color, action.data.size, action.data.eraser);
 					const savedAction = new Action('brushPoint', brushPoint, serverTotalActions++);
 					// Twice because we need two points to make a point if the player clicks without moving
 					serverActions.push(savedAction);
@@ -122,7 +131,7 @@
 								break;
 							}
 						}
-						const brushPoint = new BrushPoint(new Point(point.x, point.y), lastPoint.color, lastPoint.brushSize);
+						const brushPoint = new BrushPoint(new Point(point.x, point.y), lastPoint.color, lastPoint.brushSize, lastPoint.eraser);
 						serverActions.push(new Action('brushPoint', brushPoint, lastAction));
 					}
 				}
@@ -180,9 +189,9 @@
 		localUndos.length = 0;
 	}
 
-	function createBrush(playerId: string, point: Point, selectedColor: string, brushSize: number, ctx: CanvasRenderingContext2D): void {
+	function createBrush(playerId: string, point: Point, selectedColor: string, brushSize: number, eraser: boolean, ctx: CanvasRenderingContext2D): void {
 		clearUndoStack();
-		const brushPoint = new BrushPoint(new Point(point.x, point.y), selectedColor, brushSize);
+		const brushPoint = new BrushPoint(new Point(point.x, point.y), selectedColor, brushSize, eraser);
 		const action = new Action('brushPoint', brushPoint, totalActions++);
 		localActionStack.push(action);
 		localActionStack.push(action);
@@ -208,7 +217,7 @@
 		if (lastPoint && lastPoint.point.distanceSquared(point) < drawDistanceThreshold)
 		return false;
 
-		const brushPoint = new BrushPoint(new Point(point.x, point.y), lastPoint.color, lastPoint.brushSize);
+		const brushPoint = new BrushPoint(new Point(point.x, point.y), lastPoint.color, lastPoint.brushSize, lastPoint.eraser);
 		localActionStack.push(new Action('brushPoint', brushPoint, pathId));
 		brushPoint.drawLine(canvas, ctx, lastPoint);
 		return true;
@@ -216,40 +225,14 @@
 
 	onDestroy(() => {
 		canvas.removeEventListener('mousedown', onMouseDown);
-		canvas.removeEventListener('mouseenter', onMouseEnter);
 		canvas.removeEventListener('mousemove', onMouseMove);
 		canvas.removeEventListener('mouseup', stopDrawing);
-		canvas.removeEventListener('mouseleave', onMouseLeave);
 	})
-
-	function onMouseLeave(e: MouseEvent) {
-		const distance = Math.sqrt(e.movementX * e.movementX + e.movementY * e.movementY);
-		const angle = Math.atan2(e.movementY, e.movementX);
-		const point = new Point(e.clientX - Math.cos(angle) * distance, e.clientY - Math.sin(angle) * distance).toRectSpace(canvas.getBoundingClientRect())
-		point.x = Math.max(0, Math.min(point.x, canvas.width));
-		point.y = Math.max(0, Math.min(point.y, canvas.height));
-
-		Global.socket.emit('updateBrush', {points: [point]});
-		stopDrawing(e);
-	}
-
-	function onMouseEnter(e: MouseEvent): void {
-		if (!drawing)
-			return;
-		const distance = Math.sqrt(e.movementX * e.movementX + e.movementY * e.movementY);
-		const angle = Math.atan2(e.movementY, e.movementX);
-		const point = new Point(e.clientX - Math.cos(angle) * distance, e.clientY - Math.sin(angle) * distance).toRectSpace(canvas.getBoundingClientRect());
-		point.x = Math.max(0, Math.min(point.x, canvas.width));
-		point.y = Math.max(0, Math.min(point.y, canvas.height));
-
-		createBrush(Global.socket.id, point, selectedColor, brushSize, ctx);
-		Global.socket.emit('createBrush', { color: selectedColor, size: brushSize, point });
-	}
 
 	function onMouseDown(e: MouseEvent): void {
 		const point = new Point(e.clientX, e.clientY).toRectSpace(canvas.getBoundingClientRect());
-		createBrush(Global.socket.id, point, selectedColor, brushSize, ctx);
-		Global.socket.emit('createBrush', { color: selectedColor, size: brushSize, point });
+		createBrush(Global.socket.id, point, selectedColor, brushSize, selectedTool == 'eraser', ctx);
+		Global.socket.emit('createBrush', { color: selectedColor, size: brushSize, point, eraser: selectedTool == 'eraser' });
 		drawing = true;
 	}
 
@@ -275,16 +258,17 @@
 		{
 			localActionStack.length = 0;
 			localUndos.length = 0;
+		}
+		if (!serverActionsPerPlayer.get(playerId)) {
 			render();
 			return;
 		}
-		if (!serverActionsPerPlayer.get(playerId))
-			return;
 		const pathIds = serverActionsPerPlayer.get(playerId);
 		for (let i = 0; i < serverActions.length - 1; i++) {
 			if (pathIds.indexOf(serverActions[i].id) != -1)
-				serverActions.splice(i--, 1);
+			serverActions.splice(i--, 1);
 		}
+		render();
 	}
 
 	function undo(): void {
@@ -358,9 +342,15 @@
 	<button on:click={clearButton}>Clear</button>
 	<button on:click={undoButton}>Undo</button>
 	<button on:click={redoButton}>Redo</button>
+	<button on:click={selectBrush}>Brush</button>
+	<button on:click={selectEraser}>Eraser</button>
 </section>
 
 <style>
+	canvas {
+		background-color: white;
+	}
+
 	section {
 		background-color: #ca0000ff;
 	}
