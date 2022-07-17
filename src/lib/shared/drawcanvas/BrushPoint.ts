@@ -1,4 +1,4 @@
-import type Point from "./Point";
+import type Point from "../Point";
 
 export default class BrushPoint {
 	color: string;

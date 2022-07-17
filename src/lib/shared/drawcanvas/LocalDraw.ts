@@ -17,34 +17,25 @@ export default class LocalDraw {
 	The current amount of local actions (creating a path, filling, ...).
 	It is used to create group ids for actions, in the case an action is dependant of an other
 	(like updatePath that adds a point to an already existing action)
-	When undoing, all the actions with a certain id are deleted. This is how we remove all points of a path
+	When undoing, all the actions with a certain id are undone. This is how we remove all points of a path
 	*/
 	totalActions = 0;
 
-	canvas: HTMLCanvasElement;
-	ctx: CanvasRenderingContext2D;
-
-	constructor(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D) {
-		this.ctx = ctx;
-		this.canvas = canvas;
-	}
-
-
-	createBrush(point: Point, color: string, size: number, eraser: boolean): void {
+	createBrush(point: Point, color: string, size: number, eraser: boolean, layer: number, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D): void {
 		const brushPoint = new BrushPoint(point, color, size, eraser);
-		const action = new Action('brushPoint', brushPoint, this.totalActions++);
+		const action = new Action('brushPoint', brushPoint, this.totalActions++, layer);
 		this.actionStack.push(action);
 		this.actionStack.push(action);
-		brushPoint.drawLine(this.canvas, this.ctx, brushPoint);
+		brushPoint.drawLine(canvas, ctx, brushPoint);
 	}
 
-	addPoint(point: Point, lastPoint: BrushPoint, pathId: number): boolean {
-		if (lastPoint && lastPoint.point.distanceSquared(point) < this.drawDistanceThreshold)
+	addPoint(point: Point, lastPoint: Action, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D): boolean {
+		if (lastPoint && point.distanceSquared(lastPoint.data.point) < this.drawDistanceThreshold)
 			return false;
 
-		const brushPoint = new BrushPoint(point, lastPoint.color, lastPoint.brushSize, lastPoint.eraser);
-		this.actionStack.push(new Action('brushPoint', brushPoint, pathId));
-		brushPoint.drawLine(this.canvas, this.ctx, lastPoint);
+		const brushPoint = new BrushPoint(point, lastPoint.data.color, lastPoint.data.brushSize, lastPoint.data.eraser);
+		this.actionStack.push(new Action('brushPoint', brushPoint, lastPoint.id, lastPoint.layer));
+		brushPoint.drawLine(canvas, ctx, lastPoint.data);
 		return true;
 	}
 
@@ -76,14 +67,5 @@ export default class LocalDraw {
 			}
 		}
 		this.undos.pop();
-	}
-
-	render() {
-		const lastPointPerGroup = new Map<number, number>();
-		for (let i = 0; i < this.actionStack.length; i++) {
-			if (lastPointPerGroup.get(this.actionStack[i].id) && !this.actionStack[i].undone)
-				this.actionStack[i].data.drawLine(this.canvas, this.ctx, this.actionStack[lastPointPerGroup.get(this.actionStack[i].id)].data);
-			lastPointPerGroup.set(this.actionStack[i].id, i);
-		}
 	}
 }

@@ -38,7 +38,7 @@ export default class ServerDraw {
 			this.actionsPerPlayer.set(action.requestedBy, [])
 		this.actionsPerPlayer.get(action.requestedBy).push(this.totalActions);
 		const brushPoint = new BrushPoint(new Point(action.data.point.x, action.data.point.y), action.data.color, action.data.size, action.data.eraser);
-		const savedAction = new Action('brushPoint', brushPoint, this.totalActions++);
+		const savedAction = new Action('brushPoint', brushPoint, this.totalActions++, action.data.layer);
 		// Twice because we need two points to make a point if the player clicks without moving
 		this.actionStack.push(savedAction);
 		this.actionStack.push(savedAction);
@@ -51,15 +51,17 @@ export default class ServerDraw {
 			// We use the last point to determine the size and the color of the brush
 			const lastAction = this.actionsPerPlayer.get(action.requestedBy)[this.actionsPerPlayer.get(action.requestedBy).length - 1];
 			let lastPoint: BrushPoint = undefined;
+			let lastLayer: number = undefined;
 			// findLast and findLastIndex are not compatible with firefox
 			for (let i = this.actionStack.length - 1; i >= 0; i--) {
 				if (lastAction == this.actionStack[i].id) {
 					lastPoint = this.actionStack[i].data;
+					lastLayer = this.actionStack[i].layer;
 					break;
 				}
 			}
 			const brushPoint = new BrushPoint(new Point(point.x, point.y), lastPoint.color, lastPoint.brushSize, lastPoint.eraser);
-			this.actionStack.push(new Action('brushPoint', brushPoint, lastAction));
+			this.actionStack.push(new Action('brushPoint', brushPoint, lastAction, lastLayer));
 		}
 	}
 
@@ -99,14 +101,5 @@ export default class ServerDraw {
 			this.undosPerPlayer.delete(playerId);
 		else
 			this.undosPerPlayer.get(playerId).pop();
-	}
-
-	render() {
-		const serverLastPointPerGroup = new Map<number, number>();
-		for (let i = 0; i < this.actionStack.length; i++) {
-			if (serverLastPointPerGroup.get(this.actionStack[i].id) && !this.actionStack[i].undone)
-			this.actionStack[i].data.drawLine(this.canvas, this.ctx, this.actionStack[serverLastPointPerGroup.get(this.actionStack[i].id)].data);
-			serverLastPointPerGroup.set(this.actionStack[i].id, i);
-		}
 	}
 }

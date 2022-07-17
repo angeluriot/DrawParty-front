@@ -22,14 +22,19 @@
 	import Point from "../shared/Point";
 	import LocalDraw from "../shared/drawcanvas/LocalDraw";
 	import ServerDraw from "../shared/drawcanvas/ServerDraw";
+	import type Action from "../shared/drawcanvas/Action";
 
-	let canvas: HTMLCanvasElement;
-	let ctx: CanvasRenderingContext2D;
+	// 0 = main (layer 1), 1 = layer 2, 2 = sketch
+	let canvasByLayer: HTMLCanvasElement[] = [undefined, undefined, undefined];
+	let contextByLayer: CanvasRenderingContext2D[] = [undefined, undefined, undefined];
 
 	let selectedTool: string = 'brush';
 	let drawing = false;
 	let selectedColor = '#000000';
 	let brushSize = 3;
+
+	// 0 = main (layer 1), 1 = layer 2, 2 = sketch
+	let selectedLayer = 0;
 
 	let localDraw: LocalDraw;
 	let serverDraw: ServerDraw;
@@ -42,23 +47,37 @@
 		selectedTool = 'eraser';
 	}
 
+	function selectSketchLayer() {
+		selectedLayer = 2;
+	}
+
+	function selectLayer1() {
+		selectedLayer = 1;
+	}
+
+	function selectLayer2() {
+		selectedLayer = 0;
+	}
+
 	function drawBackground() {
-		ctx.fillStyle = '#ffffff';
-		ctx.fillRect(0, 0, canvas.width, canvas.height);
+		for (let i = 0; i < contextByLayer.length; i++)
+			contextByLayer[i].clearRect(0, 0, canvasByLayer[i].width, canvasByLayer[i].height);
 	}
 
 	onMount(() => {
-		ctx = canvas.getContext("2d");
-		localDraw = new LocalDraw(canvas, ctx);
-		serverDraw = new ServerDraw(canvas, ctx);
+		for (let i = 0; i < canvasByLayer.length; i++)
+			contextByLayer[i] = canvasByLayer[i].getContext("2d");
+		localDraw = new LocalDraw();
+		serverDraw = new ServerDraw(canvasByLayer[0], contextByLayer[0]);
 
 		// Anti-aliasing
-		ctx.translate(0.5, 0.5);
+		for (let i = 0; i < contextByLayer.length; i++)
+			contextByLayer[i].translate(0.5, 0.5);
 		drawBackground();
 
-		canvas.addEventListener('mousedown', onMouseDown);
-		canvas.addEventListener('mousemove', onMouseMove);
-		canvas.addEventListener('mouseup', stopDrawing);
+		canvasByLayer[0].addEventListener('mousedown', onMouseDown);
+		canvasByLayer[0].addEventListener('mousemove', onMouseMove);
+		canvasByLayer[0].addEventListener('mouseup', stopDrawing);
 
 		// Triggered every server tick
 		Global.socket.on('serverUpdate', (data: any) => {
@@ -102,47 +121,45 @@
 		localDraw.undos.length = 0;
 	}
 
-	function createBrush(point: Point, selectedColor: string, brushSize: number, eraser: boolean): void {
+	function createBrush(point: Point): void {
 		clearUndoStack();
-		localDraw.createBrush(point, selectedColor, brushSize, eraser);
+		localDraw.createBrush(point, selectedColor, brushSize, selectedTool == 'eraser', selectedLayer, canvasByLayer[selectedLayer], contextByLayer[selectedLayer]);
 	}
 
 	function addPoint(point: Point): boolean {
-		let lastPoint: BrushPoint = undefined;
-		let pathId = 0;
+		let lastAction: Action = undefined;
 		if (localDraw.actionStack.length > 0) {
-			lastPoint = localDraw.actionStack[localDraw.actionStack.length - 1].data;
-			pathId = localDraw.actionStack[localDraw.actionStack.length - 1].id;
+			lastAction = localDraw.actionStack[localDraw.actionStack.length - 1];
 		} else {
-			pathId = serverDraw.actionsPerPlayer.get(Global.socket.id)[serverDraw.actionsPerPlayer.get(Global.socket.id).length - 1];
+			let pathId = serverDraw.actionsPerPlayer.get(Global.socket.id)[serverDraw.actionsPerPlayer.get(Global.socket.id).length - 1];
 			// findLast and findLastIndex are not compatible with firefox
 			for (let i = serverDraw.actionStack.length - 1; i >= 0; i--) {
 				if (pathId == serverDraw.actionStack[i].id) {
-					lastPoint = serverDraw.actionStack[i].data;
+					lastAction = serverDraw.actionStack[i];
 					break;
 				}
 			}
 		}
-		return localDraw.addPoint(point, lastPoint, pathId);
+		return localDraw.addPoint(point, lastAction, canvasByLayer[lastAction.layer], contextByLayer[lastAction.layer]);
 	}
 
 	onDestroy(() => {
-		canvas.removeEventListener('mousedown', onMouseDown);
-		canvas.removeEventListener('mousemove', onMouseMove);
-		canvas.removeEventListener('mouseup', stopDrawing);
+		canvasByLayer[0].removeEventListener('mousedown', onMouseDown);
+		canvasByLayer[0].removeEventListener('mousemove', onMouseMove);
+		canvasByLayer[0].removeEventListener('mouseup', stopDrawing);
 	})
 
 	function onMouseDown(e: MouseEvent): void {
-		const point = new Point(e.clientX, e.clientY).toRectSpace(canvas.getBoundingClientRect());
-		createBrush(point, selectedColor, brushSize, selectedTool == 'eraser');
-		Global.socket.emit('createBrush', { color: selectedColor, size: brushSize, point, eraser: selectedTool == 'eraser' });
+		const point = new Point(e.clientX, e.clientY).toRectSpace(canvasByLayer[0].getBoundingClientRect());
+		createBrush(point);
+		Global.socket.emit('createBrush', { color: selectedColor, size: brushSize, point, eraser: selectedTool == 'eraser', layer: selectedLayer });
 		drawing = true;
 	}
 
 	function onMouseMove(e: MouseEvent): void {
 		if (!drawing)
 			return;
-		const point = new Point(e.clientX, e.clientY).toRectSpace(canvas.getBoundingClientRect());
+		const point = new Point(e.clientX, e.clientY).toRectSpace(canvasByLayer[0].getBoundingClientRect());
 		if (addPoint(point))
 			Global.socket.emit('updateBrush', {points: [point]});
 	}
@@ -188,13 +205,30 @@
 
 	function render() {
 		drawBackground();
-		serverDraw.render();
-		localDraw.render();
+
+		const serverLastPointPerGroup = new Map<number, number>();
+		for (let i = 0; i < serverDraw.actionStack.length; i++) {
+			if (serverLastPointPerGroup.get(serverDraw.actionStack[i].id) && !serverDraw.actionStack[i].undone)
+				serverDraw.actionStack[i].data.drawLine(canvasByLayer[serverDraw.actionStack[i].layer], contextByLayer[serverDraw.actionStack[i].layer], serverDraw.actionStack[serverLastPointPerGroup.get(serverDraw.actionStack[i].id)].data);
+			serverLastPointPerGroup.set(serverDraw.actionStack[i].id, i);
+		}
+
+		// Render local actions that haven't been confirmed by the server yet.
+		const lastPointPerGroup = new Map<number, number>();
+		for (let i = 0; i < localDraw.actionStack.length; i++) {
+			if (lastPointPerGroup.get(localDraw.actionStack[i].id) && !localDraw.actionStack[i].undone)
+				localDraw.actionStack[i].data.drawLine(canvasByLayer[localDraw.actionStack[i].layer], contextByLayer[localDraw.actionStack[i].layer], localDraw.actionStack[lastPointPerGroup.get(localDraw.actionStack[i].id)].data);
+			lastPointPerGroup.set(localDraw.actionStack[i].id, i);
+		}
 	}
 </script>
 
 <section>
-	<canvas bind:this={canvas} width="800" height="600"></canvas>
+	<div class="canvas-wrapper">
+		<canvas bind:this={canvasByLayer[2]} width="800" height="600"></canvas>
+		<canvas bind:this={canvasByLayer[1]} width="800" height="600"></canvas>
+		<canvas bind:this={canvasByLayer[0]} width="800" height="600"></canvas>
+	</div>
 	<input type="color" bind:value={selectedColor}>
 	<span>Brush size : {brushSize}</span>
 	<input type="range" min="1" max="30" bind:value={brushSize}>
@@ -203,11 +237,24 @@
 	<button on:click={redoButton}>Redo</button>
 	<button on:click={selectBrush}>Brush</button>
 	<button on:click={selectEraser}>Eraser</button>
+	<button on:click={selectSketchLayer}>Sketch</button>
+	<button on:click={selectLayer1}>Layer 1</button>
+	<button on:click={selectLayer2}>Layer 2</button>
 </section>
 
 <style>
-	canvas {
+	div.canvas-wrapper {
+		position: relative;
 		background-color: white;
+		width: 800px;
+		height: 600px;
+		margin: auto;
+	}
+
+	canvas {
+		position: absolute;
+		top: 0%;
+		left: 0%;
 	}
 
 	section {
