@@ -1,0 +1,14 @@
+:root
+{
+	font-size: 2.7vh;
+}
+
+h1
+{
+	font-family: 'To-Japan';
+	font-size: 2rem;
+	color: #FFF00D;
+	text-shadow: 0rem 0.4rem 0rem #F9A715;
+	text-align: center;
+	margin-top: -0.65rem;
+}

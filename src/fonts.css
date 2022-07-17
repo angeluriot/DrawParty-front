@@ -1,0 +1,6 @@
+@font-face
+{
+	font-family: "To-Japan";
+	src: url("./assets/fonts/To-Japan/To-Japan.ttf") format("truetype"),
+	url("./assets/fonts/To-Japan/To-Japan.otf") format("opentype");
+}

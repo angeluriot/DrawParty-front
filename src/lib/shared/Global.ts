@@ -1,12 +1,12 @@
-import { io } from 'socket.io-client';
+import { io, Socket } from 'socket.io-client';
 
 export class Global
 {
 	static socket = io('http://localhost:3001');
-	static users: User[] = [];
+	static users = new Map<string, User>();
 }
 
 export type User = {
-	id: string;
-	image: string;
+	id: string,
+	image: string
 };
