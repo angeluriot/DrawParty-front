@@ -17,12 +17,10 @@
 	*/
 `
 	import { onMount, onDestroy } from "svelte";
-	import type BrushPoint from "../shared/drawcanvas/BrushPoint";
 	import Global from "../shared/global";
 	import Point from "../shared/Point";
-	import LocalDraw from "../shared/drawcanvas/LocalDraw";
-	import ServerDraw from "../shared/drawcanvas/ServerDraw";
-	import type Action from "../shared/drawcanvas/Action";
+	import DrawManager from "../shared/drawcanvas/DrawManager";
+import BrushPoint from "../shared/drawcanvas/BrushPoint";
 
 	// 0 = main (layer 1), 1 = layer 2, 2 = sketch
 	let canvasByLayer: HTMLCanvasElement[] = [undefined, undefined, undefined];
@@ -36,8 +34,7 @@
 	// 0 = main (layer 1), 1 = layer 2, 2 = sketch
 	let selectedLayer = 0;
 
-	let localDraw: LocalDraw;
-	let serverDraw: ServerDraw;
+	let drawManager = new DrawManager();
 
 	function selectBrush() {
 		selectedTool = 'brush';
@@ -60,15 +57,14 @@
 	}
 
 	function drawBackground() {
+		// +1 because of the translation of the canvas for anti aliasing
 		for (let i = 0; i < contextByLayer.length; i++)
-			contextByLayer[i].clearRect(0, 0, canvasByLayer[i].width, canvasByLayer[i].height);
+			contextByLayer[i].clearRect(-1, -1, canvasByLayer[i].width + 1, canvasByLayer[i].height + 1);
 	}
 
 	onMount(() => {
 		for (let i = 0; i < canvasByLayer.length; i++)
 			contextByLayer[i] = canvasByLayer[i].getContext("2d");
-		localDraw = new LocalDraw();
-		serverDraw = new ServerDraw(canvasByLayer[0], contextByLayer[0]);
 
 		// Anti-aliasing
 		for (let i = 0; i < contextByLayer.length; i++)
@@ -87,60 +83,61 @@
 				Therefore, the nth action of the server action list is the nth action of the local player.
 				This allows to splice the first element of the local (unconfirmed) list every time we encounter an action of the local player
 				*/
-				if (action.requestedBy == Global.socket.id)
-					localDraw.actionStack.splice(0, 1);
 
-				if (action.type != 'undo' && action.type != 'redo' && action.type != 'updateBrush' && serverDraw.undosPerPlayer.get(action.requestedBy))
-					serverDraw.clearUndoStackOfPlayer(action.requestedBy);
+				if (action.type != 'undo' && action.type != 'redo' && action.type != 'updateBrush')
+					drawManager.clearUndoStack(action.requestedBy);
 
 				// Creates a new brush path
-				if (action.type == 'createBrush')
-					serverDraw.createBrush(action);
+				if (action.type == 'createBrush') {
+					if (action.requestedBy == Global.socket.id) {
+						// Twice for the two points
+						drawManager.confirmAction();
+						drawManager.confirmAction();
+						continue;
+					}
+					const brushPoint = new BrushPoint(new Point(action.data.point.x, action.data.point.y), action.data.color, action.data.size, action.data.eraser);
+					drawManager.createBrush(action.requestedBy, brushPoint, action.data.layer, true, canvasByLayer[action.data.layer], contextByLayer[action.data.layer]);
+				}
 				// Adds a point to the current path of the action's player
-				else if (action.type == 'updateBrush')
-					serverDraw.updateBrush(action)
-				else if (action.type == 'undo')
-					serverDraw.undo(action.requestedBy);
-				else if (action.type == 'redo')
-					serverDraw.redo(action.requestedBy);
+				else if (action.type == 'updateBrush') {
+					for (const point of action.data) {
+						if (action.requestedBy == Global.socket.id) {
+							drawManager.confirmAction();
+							continue;
+						}
+						const lastAction = drawManager.getLastActionOfPlayer(action.requestedBy);
+						drawManager.addPoint(lastAction, new Point(point.x, point.y), true, canvasByLayer[lastAction.layer], contextByLayer[lastAction.layer]);
+					}
+				}
+				else if (action.type == 'undo') {
+					if (action.requestedBy != Global.socket.id)
+						drawManager.undo(action.requestedBy);
+				}
+				else if (action.type == 'redo') {
+					if (action.requestedBy != Global.socket.id)
+						drawManager.redo(action.requestedBy);
+				}
 			}
 			if (data.length > 0)
 				render();
 		});
 
 		// Clears all of a player's actions
-		Global.socket.on('clearActions', (data: any) => {
+		/*Global.socket.on('clearActions', (data: any) => {
 			clearActions(data.requestedBy);
-		});
+		});*/
 	});
 
-	function clearUndoStack() {
-		for (let i = 0; i < serverDraw.actionStack.length; i++)
-			if (localDraw.undos.indexOf(serverDraw.actionStack[i].id) != -1)
-				serverDraw.actionStack.splice(i, 1);
-		localDraw.undos.length = 0;
-	}
-
 	function createBrush(point: Point): void {
-		clearUndoStack();
-		localDraw.createBrush(point, selectedColor, brushSize, selectedTool == 'eraser', selectedLayer, canvasByLayer[selectedLayer], contextByLayer[selectedLayer]);
+		const brushPoint = new BrushPoint(point, selectedColor, brushSize, selectedTool == 'eraser');
+		drawManager.createBrush(Global.socket.id, brushPoint, selectedLayer, false, canvasByLayer[selectedLayer], contextByLayer[selectedLayer]);
+		if (selectedLayer != 2)
+			Global.socket.emit('createBrush', { color: selectedColor, size: brushSize, point, eraser: selectedTool == 'eraser', layer: selectedLayer });
 	}
 
 	function addPoint(point: Point): boolean {
-		let lastAction: Action = undefined;
-		if (localDraw.actionStack.length > 0) {
-			lastAction = localDraw.actionStack[localDraw.actionStack.length - 1];
-		} else {
-			let pathId = serverDraw.actionsPerPlayer.get(Global.socket.id)[serverDraw.actionsPerPlayer.get(Global.socket.id).length - 1];
-			// findLast and findLastIndex are not compatible with firefox
-			for (let i = serverDraw.actionStack.length - 1; i >= 0; i--) {
-				if (pathId == serverDraw.actionStack[i].id) {
-					lastAction = serverDraw.actionStack[i];
-					break;
-				}
-			}
-		}
-		return localDraw.addPoint(point, lastAction, canvasByLayer[lastAction.layer], contextByLayer[lastAction.layer]);
+		const lastAction = drawManager.getLastActionOfPlayer(Global.socket.id);
+		return drawManager.addPoint(lastAction, point, false, canvasByLayer[lastAction.layer], contextByLayer[lastAction.layer]);
 	}
 
 	onDestroy(() => {
@@ -152,7 +149,6 @@
 	function onMouseDown(e: MouseEvent): void {
 		const point = new Point(e.clientX, e.clientY).toRectSpace(canvasByLayer[0].getBoundingClientRect());
 		createBrush(point);
-		Global.socket.emit('createBrush', { color: selectedColor, size: brushSize, point, eraser: selectedTool == 'eraser', layer: selectedLayer });
 		drawing = true;
 	}
 
@@ -160,7 +156,7 @@
 		if (!drawing)
 			return;
 		const point = new Point(e.clientX, e.clientY).toRectSpace(canvasByLayer[0].getBoundingClientRect());
-		if (addPoint(point))
+		if (addPoint(point) && selectedLayer != 2)
 			Global.socket.emit('updateBrush', {points: [point]});
 	}
 
@@ -169,63 +165,41 @@
 	}
 
 	function clearButton(): void {
-		clearActions(Global.socket.id);
+		drawManager.clearActions(Global.socket.id);
+		render();
 		Global.socket.emit('clearActions');
 	}
 
-	function clearActions(playerId: string): void {
-		if (playerId == Global.socket.id)
-		{
-			localDraw.actionStack.length = 0;
-			localDraw.undos.length = 0;
-		}
-		if (!serverDraw.actionsPerPlayer.get(playerId)) {
-			render();
-			return;
-		}
-		const pathIds = serverDraw.actionsPerPlayer.get(playerId);
-		for (let i = 0; i < serverDraw.actionStack.length - 1; i++) {
-			if (pathIds.indexOf(serverDraw.actionStack[i].id) != -1)
-				serverDraw.actionStack.splice(i--, 1);
-		}
-		render();
-	}
-
 	function undoButton(): void {
-		localDraw.undo();
+		if (drawManager.undo(Global.socket.id))
+			Global.socket.emit('undo');
 		render();
-		Global.socket.emit('undo');
 	}
 
 	function redoButton(): void {
-		localDraw.redo();
+		if (drawManager.redo(Global.socket.id)) {
+			console.log('sent');
+			Global.socket.emit('redo');
+		}
 		render();
-		Global.socket.emit('redo');
 	}
 
 	function render() {
 		drawBackground();
 
-		const serverLastPointPerGroup = new Map<number, number>();
-		for (let i = 0; i < serverDraw.actionStack.length; i++) {
-			if (serverLastPointPerGroup.get(serverDraw.actionStack[i].id) && !serverDraw.actionStack[i].undone)
-				serverDraw.actionStack[i].data.drawLine(canvasByLayer[serverDraw.actionStack[i].layer], contextByLayer[serverDraw.actionStack[i].layer], serverDraw.actionStack[serverLastPointPerGroup.get(serverDraw.actionStack[i].id)].data);
-			serverLastPointPerGroup.set(serverDraw.actionStack[i].id, i);
-		}
-
-		// Render local actions that haven't been confirmed by the server yet.
 		const lastPointPerGroup = new Map<number, number>();
-		for (let i = 0; i < localDraw.actionStack.length; i++) {
-			if (lastPointPerGroup.get(localDraw.actionStack[i].id) && !localDraw.actionStack[i].undone)
-				localDraw.actionStack[i].data.drawLine(canvasByLayer[localDraw.actionStack[i].layer], contextByLayer[localDraw.actionStack[i].layer], localDraw.actionStack[lastPointPerGroup.get(localDraw.actionStack[i].id)].data);
-			lastPointPerGroup.set(localDraw.actionStack[i].id, i);
+		for (let i = 0; i < drawManager.actions.length; i++) {
+			if (lastPointPerGroup.get(drawManager.actions[i].id) && !drawManager.actions[i].undone) {
+				drawManager.actions[i].data.drawLine(canvasByLayer[drawManager.actions[i].layer], contextByLayer[drawManager.actions[i].layer], drawManager.actions[lastPointPerGroup.get(drawManager.actions[i].id)].data);
+			}
+			lastPointPerGroup.set(drawManager.actions[i].id, i);
 		}
 	}
 </script>
 
 <section>
 	<div class="canvas-wrapper">
-		<canvas bind:this={canvasByLayer[2]} width="800" height="600"></canvas>
+		<canvas class="sketch" bind:this={canvasByLayer[2]} width="800" height="600"></canvas>
 		<canvas bind:this={canvasByLayer[1]} width="800" height="600"></canvas>
 		<canvas bind:this={canvasByLayer[0]} width="800" height="600"></canvas>
 	</div>
@@ -255,6 +229,10 @@
 		position: absolute;
 		top: 0%;
 		left: 0%;
+	}
+
+	canvas.sketch {
+		opacity: 0.5;
 	}
 
 	section {
