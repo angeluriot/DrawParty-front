@@ -97,6 +97,8 @@ import BrushPoint from "../shared/drawcanvas/BrushPoint";
 					}
 					const brushPoint = new BrushPoint(new Point(action.data.point.x, action.data.point.y), action.data.color, action.data.size, action.data.eraser);
 					drawManager.createBrush(action.requestedBy, brushPoint, action.data.layer, true, canvasByLayer[action.data.layer], contextByLayer[action.data.layer]);
+					drawManager.moveLastToConfirmPosition();
+					drawManager.moveLastToConfirmPosition();
 				}
 				// Adds a point to the current path of the action's player
 				else if (action.type == 'updateBrush') {
@@ -107,6 +109,7 @@ import BrushPoint from "../shared/drawcanvas/BrushPoint";
 						}
 						const lastAction = drawManager.getLastActionOfPlayer(action.requestedBy);
 						drawManager.addPoint(lastAction, new Point(point.x, point.y), true, canvasByLayer[lastAction.layer], contextByLayer[lastAction.layer]);
+						drawManager.moveLastToConfirmPosition();
 					}
 				}
 				else if (action.type == 'undo') {
@@ -123,21 +126,21 @@ import BrushPoint from "../shared/drawcanvas/BrushPoint";
 		});
 
 		// Clears all of a player's actions
-		/*Global.socket.on('clearActions', (data: any) => {
-			clearActions(data.requestedBy);
-		});*/
+		Global.socket.on('clearActions', (data: any) => {
+			drawManager.clearActions(data.requestedBy);
+		});
 	});
 
 	function createBrush(point: Point): void {
 		const brushPoint = new BrushPoint(point, selectedColor, brushSize, selectedTool == 'eraser');
-		drawManager.createBrush(Global.socket.id, brushPoint, selectedLayer, false, canvasByLayer[selectedLayer], contextByLayer[selectedLayer]);
+		drawManager.createBrush(Global.socket.id, brushPoint, selectedLayer, selectedLayer == 2, canvasByLayer[selectedLayer], contextByLayer[selectedLayer]);
 		if (selectedLayer != 2)
 			Global.socket.emit('createBrush', { color: selectedColor, size: brushSize, point, eraser: selectedTool == 'eraser', layer: selectedLayer });
 	}
 
 	function addPoint(point: Point): boolean {
 		const lastAction = drawManager.getLastActionOfPlayer(Global.socket.id);
-		return drawManager.addPoint(lastAction, point, false, canvasByLayer[lastAction.layer], contextByLayer[lastAction.layer]);
+		return drawManager.addPoint(lastAction, point, selectedLayer == 2, canvasByLayer[lastAction.layer], contextByLayer[lastAction.layer]);
 	}
 
 	onDestroy(() => {
@@ -178,7 +181,6 @@ import BrushPoint from "../shared/drawcanvas/BrushPoint";
 
 	function redoButton(): void {
 		if (drawManager.redo(Global.socket.id)) {
-			console.log('sent');
 			Global.socket.emit('redo');
 		}
 		render();

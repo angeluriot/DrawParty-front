@@ -39,13 +39,15 @@ export default class DrawManager {
 		let index = this.actions.findIndex(a => !a.confirmed);
 		if (index == -1)
 			return;
-		let newIndex = index;
-		for (; newIndex < this.actions.length; newIndex++) {
-			if (!this.actions[newIndex].confirmed)
-				break;
-		}
 		this.actions[index].confirmed = true;
-		Global.arrayMove(this.actions, index, newIndex);
+	}
+
+	moveLastToConfirmPosition() {
+		let index = 0;
+		while (index < this.actions.length && this.actions[index].confirmed)
+			index++;
+		if (index < this.actions.length)
+			Global.arrayMove(this.actions, this.actions.length - 1, index);
 	}
 
 	undo(playerId: string): boolean {
