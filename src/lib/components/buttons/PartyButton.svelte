@@ -3,10 +3,11 @@
 	import joinParty from '../../../assets/shapes/joinParty.svg';
 
 	export let type: string;
+	export let onClick: () => void;
 </script>
 
 <div>
-	<img src={type === 'create' ? createParty : joinParty} alt={type === 'create' ? "create party" : "join party"}/>
+	<img src={type === 'create' ? createParty : joinParty} alt={type === 'create' ? "create party" : "join party"} on:click={onClick}/>
 </div>
 
 <style>

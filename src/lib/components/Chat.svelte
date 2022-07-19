@@ -7,18 +7,18 @@
 
 	onMount(() =>
 	{
-		Global.socket.on('broadcastMessage', (user_id: string, message: string) =>
+		Global.socket.on('broadcastMessage', (player_id: string, message: string) =>
 		{
-			let user = Global.users.get(user_id);
-			messages = [...messages, { image: user.image, text: message }];
+			let player = Global.players.get(player_id);
+			messages = [...messages, { image: player.image, text: message }];
 		});
 	});
 
 	function sendMessage()
 	{
 		Global.socket.emit('message', input);
-		let user = Global.users.get(Global.socket.id);
-		messages = [...messages, { image: user.image, text: input }];
+		let player = Global.players.get(Global.socket.id);
+		messages = [...messages, { image: player.image, text: input }];
 		input = '';
 	}
 </script>

@@ -1,12 +1,20 @@
-import { io, Socket } from 'socket.io-client';
+import { io } from 'socket.io-client';
+import type { Player } from './Player';
 
 export class Global
 {
 	static socket = io('http://localhost:3001');
-	static users = new Map<string, User>();
-}
+	static connected: boolean = false;
+	static partyId: string | null = null;
+	static players: Player[] = [];
 
-export type User = {
-	id: string,
-	image: string
-};
+	static getPlayer(id: string)
+	{
+		let player = Global.players.find(player => player.id === id);
+
+		if (player === undefined)
+			return null;
+
+		return player;
+	}
+}

@@ -4,6 +4,7 @@
 	import { routes } from './routes.js';
 	import background from './assets/shapes/background.svg';
 	import * as Utils from './lib/shared/utils';
+	import { Global } from './lib/shared/Global';
 	import './tailwind.css';
 	import './fonts.css';
 	import './global.css';
@@ -29,6 +30,11 @@
 	window.addEventListener('resize', updateAppSize);
 	setInterval(updateAppSize, 1000);
 	updateAppSize();
+
+	Global.socket.on('error', () =>
+	{
+		window.location.href = '/';
+	});
 
 </script>
 
