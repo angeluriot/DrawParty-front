@@ -72,7 +72,7 @@
 		}
 
 		if (!clientOnly) {
-			updateIntervalId = setInterval(sendActionsToServer, 1/30);
+			updateIntervalId = setInterval(sendActionsToServer, 1 / 20 * 1000);
 
 			// Triggered every server tick
 			Global.socket.on('serverUpdate', (data: any) => {
