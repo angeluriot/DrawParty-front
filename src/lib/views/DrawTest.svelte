@@ -16,6 +16,7 @@
 	let drawing = false;
 	let selectedColor = '#000000';
 	let brushSize = 3;
+	let updateIntervalId: NodeJS.Timer;
 
 	// 0 = main (layer 2), 1 = layer 1, 2 = sketch
 	let selectedLayer = 0;
@@ -48,6 +49,13 @@
 			contextByLayer[i].clearRect(-1, -1, canvasByLayer[i].width + 1, canvasByLayer[i].height + 1);
 	}
 
+	function sendActionsToServer() {
+		if (drawManager.actionsNotSent.length > 0) {
+			Global.socket.emit('clientUpdate', drawManager.actionsNotSent);
+			drawManager.actionsNotSent.length = 0;
+		}
+	}
+
 	onMount(() => {
 		for (let i = 0; i < canvasByLayer.length; i++)
 			contextByLayer[i] = canvasByLayer[i].getContext("2d");
@@ -64,19 +72,14 @@
 		}
 
 		if (!clientOnly) {
+			updateIntervalId = setInterval(sendActionsToServer, 1/30);
+
 			// Triggered every server tick
 			Global.socket.on('serverUpdate', (data: any) => {
 				for (const action of data) {
-					/*
-					Since websockets preserve order, players' server-side actions and local actions are in the same order
-					Therefore, the nth action of the server action list is the nth action of the local player.
-					This allows to splice the first element of the local (unconfirmed) list every time we encounter an action of the local player
-					*/
-
 					if (action.type != 'undo' && action.type != 'redo' && action.type != 'updateBrush')
 						drawManager.clearUndoStack(action.requestedBy);
 
-					// Creates a new brush path
 					if (action.type == 'createBrush') {
 						if (action.requestedBy == Global.socket.id) {
 							// Twice for the two points
@@ -85,52 +88,48 @@
 							continue;
 						}
 						const brushPoint = new BrushPoint(new Point(action.data.point.x, action.data.point.y), action.data.color, action.data.size, action.data.eraser);
-						drawManager.createBrush(action.requestedBy, brushPoint, action.data.layer, true, canvasByLayer[action.data.layer], contextByLayer[action.data.layer]);
+						drawManager.createBrush(action.requestedBy, brushPoint, action.data.layer, true, canvasByLayer[action.data.layer], contextByLayer[action.data.layer], false);
 						drawManager.moveLastToConfirmPosition();
 						drawManager.moveLastToConfirmPosition();
 					}
 					// Adds a point to the current path of the action's player
 					else if (action.type == 'updateBrush') {
-						for (const point of action.data) {
-							if (action.requestedBy == Global.socket.id) {
-								drawManager.confirmAction();
-								continue;
-							}
-							const lastAction = drawManager.getLastActionOfPlayer(action.requestedBy);
-							drawManager.addPoint(lastAction, new Point(point.x, point.y), true, canvasByLayer[lastAction.layer], contextByLayer[lastAction.layer]);
-							drawManager.moveLastToConfirmPosition();
+						if (action.requestedBy == Global.socket.id) {
+							drawManager.confirmAction();
+							continue;
 						}
+						const point = new Point(action.data.x, action.data.y);
+						const lastAction = drawManager.getLastActionOfPlayer(action.requestedBy);
+						drawManager.addPoint(lastAction, point, true, canvasByLayer[lastAction.layer], contextByLayer[lastAction.layer], false);
+						drawManager.moveLastToConfirmPosition();
 					}
 					else if (action.type == 'undo') {
 						if (action.requestedBy != Global.socket.id)
-							drawManager.undo(action.requestedBy);
+							drawManager.undo(action.requestedBy, false);
 					}
 					else if (action.type == 'redo') {
 						if (action.requestedBy != Global.socket.id)
-							drawManager.redo(action.requestedBy);
+							drawManager.redo(action.requestedBy, false);
+					}
+					else if (action.type == 'clear') {
+						if (action.requestedBy != Global.socket.id)
+							drawManager.clearActions(action.requestedBy, false);
 					}
 				}
 				if (data.length > 0)
 					render();
-			});
-
-			// Clears all of a player's actions
-			Global.socket.on('clearActions', (data: any) => {
-				drawManager.clearActions(data.requestedBy);
 			});
 		}
 	});
 
 	function createBrush(point: Point): void {
 		const brushPoint = new BrushPoint(point, selectedColor, brushSize, selectedTool == 'eraser');
-		drawManager.createBrush(Global.socket.id, brushPoint, selectedLayer, selectedLayer == 2, canvasByLayer[selectedLayer], contextByLayer[selectedLayer]);
-		if (selectedLayer != 2 && !clientOnly)
-			Global.socket.emit('createBrush', { color: selectedColor, size: brushSize, point, eraser: selectedTool == 'eraser', layer: selectedLayer });
+		drawManager.createBrush(Global.socket.id, brushPoint, selectedLayer, selectedLayer == 2, canvasByLayer[selectedLayer], contextByLayer[selectedLayer], selectedLayer != 2 && !clientOnly);
 	}
 
 	function addPoint(point: Point): boolean {
 		const lastAction = drawManager.getLastActionOfPlayer(Global.socket.id);
-		return drawManager.addPoint(lastAction, point, selectedLayer == 2, canvasByLayer[lastAction.layer], contextByLayer[lastAction.layer]);
+		return drawManager.addPoint(lastAction, point, selectedLayer == 2, canvasByLayer[lastAction.layer], contextByLayer[lastAction.layer], selectedLayer != 2 && !clientOnly);
 	}
 
 	onDestroy(() => {
@@ -140,7 +139,7 @@
 			canvasByLayer[0].removeEventListener('mouseup', stopDrawing);
 		}
 		if (!clientOnly) {
-			Global.socket.off('clearActions');
+			clearInterval(updateIntervalId);
 			Global.socket.off('serverUpdate');
 		}
 	})
@@ -155,8 +154,7 @@
 		if (!drawing)
 			return;
 		const point = new Point(e.clientX, e.clientY).toRectSpace(canvasByLayer[0].getBoundingClientRect());
-		if (addPoint(point) && selectedLayer != 2 && !clientOnly)
-			Global.socket.emit('updateBrush', {points: [point]});
+		addPoint(point)
 	}
 
 	function stopDrawing(e: MouseEvent): void {
@@ -164,22 +162,17 @@
 	}
 
 	function clearButton(): void {
-		drawManager.clearActions(Global.socket.id);
+		drawManager.clearActions(Global.socket.id, !clientOnly);
 		render();
-		if (!clientOnly)
-			Global.socket.emit('clearActions');
 	}
 
 	function undoButton(): void {
-		if (drawManager.undo(Global.socket.id) && !clientOnly)
-			Global.socket.emit('undo');
+		drawManager.undo(Global.socket.id, !clientOnly)
 		render();
 	}
 
 	function redoButton(): void {
-		if (drawManager.redo(Global.socket.id) && !clientOnly) {
-			Global.socket.emit('redo');
-		}
+		drawManager.redo(Global.socket.id, !clientOnly)
 		render();
 	}
 

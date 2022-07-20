@@ -16,4 +16,8 @@ export default class Action {
 		this.confirmed = confirmed;
 		this.player = player;
 	}
+
+	toServerFormat() {
+		return {type: this.type, data: this.data, layer: this.layer};
+	}
 }

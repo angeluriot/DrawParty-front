@@ -8,13 +8,27 @@ export default class DrawManager {
 
 	undosPerPlayer = new Map<string, number[]>();
 	actions: Action[] = [];
+	actionsNotSent: any[] = [];
 	totalActions = 0;
 
-	createBrush(playerId: string, brushPoint: BrushPoint, layer: number, confirmed: boolean, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D): void {
+	createBrush(playerId: string, brushPoint: BrushPoint, layer: number, confirmed: boolean, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, sendToServer: boolean): void {
 		this.clearUndoStack(playerId);
 		this.actions.push(new Action('brushPoint', brushPoint, this.totalActions, layer, confirmed, playerId));
 		this.actions.push(new Action('brushPoint', brushPoint, this.totalActions++, layer, confirmed, playerId));
 		brushPoint.drawLine(canvas, ctx, brushPoint);
+		if (sendToServer) {
+			this.actionsNotSent.push({
+				type: 'createBrush',
+				layer,
+				color: brushPoint.color,
+				size: brushPoint.brushSize,
+				eraser: brushPoint.eraser,
+				point: {
+					x: brushPoint.point.x,
+					y: brushPoint.point.y
+				}
+			});
+		}
 	}
 
 	getLastActionOfPlayer(playerId: string): Action {
@@ -25,13 +39,15 @@ export default class DrawManager {
 		return null;
 	}
 
-	addPoint(lastAction: Action, point: Point, confirmed: boolean, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D): boolean {
+	addPoint(lastAction: Action, point: Point, confirmed: boolean, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, sendToServer: boolean): boolean {
 		if (lastAction && point.distanceSquared(lastAction.data.point) < this.drawDistanceThreshold)
 			return false;
 
 		const brushPoint = new BrushPoint(point, lastAction.data.color, lastAction.data.brushSize, lastAction.data.eraser);
 		this.actions.push(new Action('brushPoint', brushPoint, lastAction.id, lastAction.layer, confirmed, lastAction.player));
 		brushPoint.drawLine(canvas, ctx, lastAction.data);
+		if (sendToServer)
+			this.actionsNotSent.push({type: 'updateBrush', point});
 		return true;
 	}
 
@@ -42,6 +58,10 @@ export default class DrawManager {
 		this.actions[index].confirmed = true;
 	}
 
+	addLastToNotSent() {
+		this.actionsNotSent.push(this.actions[this.actions.length - 1]);
+	}
+
 	moveLastToConfirmPosition() {
 		let index = 0;
 		while (index < this.actions.length && this.actions[index].confirmed)
@@ -50,7 +70,7 @@ export default class DrawManager {
 			Global.arrayMove(this.actions, this.actions.length - 1, index);
 	}
 
-	undo(playerId: string): boolean {
+	undo(playerId: string, sendToServer: boolean): void {
 		if (!this.undosPerPlayer.get(playerId))
 			this.undosPerPlayer.set(playerId, []);
 		let pathId = -1;
@@ -65,10 +85,11 @@ export default class DrawManager {
 			} else if (pathId == this.actions[i].id)
 				this.actions[i].undone = true;
 		}
-		return layer != 2;
+		if (sendToServer && layer != 2)
+			this.actionsNotSent.push({type: 'undo'});
 	}
 
-	redo(playerId: string): boolean {
+	redo(playerId: string, sendToServer: boolean): boolean {
 		if (!this.undosPerPlayer.get(playerId))
 			return false;
 		let pathId = -1;
@@ -85,7 +106,8 @@ export default class DrawManager {
 		this.undosPerPlayer.get(playerId).pop();
 		if (!this.undosPerPlayer.get(playerId))
 			this.undosPerPlayer.delete(playerId);
-		return layer != 2;
+		if (sendToServer && layer != 2)
+			this.actionsNotSent.push({type: 'redo'});
 	}
 
 	clearUndoStack(playerId: string) {
@@ -98,11 +120,13 @@ export default class DrawManager {
 		this.undosPerPlayer.delete(playerId);
 	}
 
-	clearActions(playerId: string) {
+	clearActions(playerId: string, sendToServer: boolean) {
 		for (let i = 0; i < this.actions.length; i++)
 			if (this.actions[i].player == playerId)
 				this.actions.splice(i--, 1);
 		if (this.undosPerPlayer.get(playerId))
 			this.undosPerPlayer.delete(playerId);
+		if (sendToServer)
+			this.actionsNotSent.push({type: 'clear'});
 	}
 }
