@@ -6,9 +6,9 @@
 	import BrushPoint from "../shared/drawcanvas/BrushPoint";
 	import Fill from "../shared/drawcanvas/Fill";
 
-	export let canDraw = Math.random() < 0.5;
+	export let canDraw = true;
 	export let clientOnly = false;
-	export let multipleDrawers = false;
+	export let multipleDrawers = true;
 
 	// 0 = main (layer 2), 1 = layer 1, 2 = sketch
 	let canvasByLayer: HTMLCanvasElement[] = [undefined, undefined, undefined];
@@ -16,9 +16,11 @@
 
 	let selectedTool: string = 'brush';
 	let drawing = false;
+	let mouseLeft = true;
 	let selectedColor = '#000000';
 	let brushSize = 3;
 	let updateIntervalId: NodeJS.Timer;
+	let lastMousePos = new Point(0, 0);
 
 	// Only used in single drawer and not client only mode
 	let actionsRendered = 0;
@@ -75,9 +77,11 @@
 		drawBackground();
 
 		if (canDraw) {
-			canvasByLayer[0].addEventListener('mousedown', onMouseDown);
-			canvasByLayer[0].addEventListener('mousemove', onMouseMove);
-			canvasByLayer[0].addEventListener('mouseup', stopDrawing);
+			document.addEventListener('mousedown', onMouseDown);
+			document.addEventListener('mousemove', onMouseMove);
+			document.addEventListener('mouseup', stopDrawing);
+			canvasByLayer[0].addEventListener('mouseleave', addPointOnLeave);
+			canvasByLayer[0].addEventListener('mouseenter', newPathOnEnter);
 		}
 
 		if (!clientOnly) {
@@ -166,9 +170,11 @@
 
 	onDestroy(() => {
 		if (canDraw) {
-			canvasByLayer[0].removeEventListener('mousedown', onMouseDown);
-			canvasByLayer[0].removeEventListener('mousemove', onMouseMove);
-			canvasByLayer[0].removeEventListener('mouseup', stopDrawing);
+			document.removeEventListener('mousedown', onMouseDown);
+			document.removeEventListener('mousemove', onMouseMove);
+			document.removeEventListener('mouseup', stopDrawing);
+			canvasByLayer[0].addEventListener('mouseenter', newPathOnEnter);
+			canvasByLayer[0].addEventListener('mouseleave', addPointOnLeave);
 		}
 		if (!clientOnly) {
 			clearInterval(updateIntervalId);
@@ -183,6 +189,8 @@
 
 	function onMouseDown(e: MouseEvent): void {
 		const point = new Point(e.clientX, e.clientY).toRectSpace(canvasByLayer[0].getBoundingClientRect());
+		if (!point.isInside(0, 0, 1, 1) || mouseLeft)
+			return;
 		if (selectedTool == 'brush' || selectedTool == 'eraser')
 			createBrush(point);
 		else if (selectedTool == 'fill')
@@ -191,10 +199,62 @@
 	}
 
 	function onMouseMove(e: MouseEvent): void {
+		lastMousePos = new Point(e.clientX, e.clientY);
+		const point = new Point(e.clientX, e.clientY).toRectSpace(canvasByLayer[0].getBoundingClientRect());
+		if (!drawing || !point.isInside(0, 0, 1, 1) || mouseLeft)
+			return;
+		addPoint(point);
+	}
+
+	function newPathOnEnter(e: MouseEvent): void {
+		console.log('entered');
+		mouseLeft = false;
 		if (!drawing)
 			return;
+
 		const point = new Point(e.clientX, e.clientY).toRectSpace(canvasByLayer[0].getBoundingClientRect());
-		addPoint(point)
+		const lastPoint = lastMousePos.toRectSpace(canvasByLayer[0].getBoundingClientRect());
+
+		const bounds = [ new Point(0, 0.99999), new Point(0.99999, 0.99999), new Point(0.99999, 0), new Point(0, 0) ];
+		const nearestPoint = findNearestPointIntersectingWith(lastPoint, point, bounds);
+		if (nearestPoint !== undefined && nearestPoint.isInside(0, 0, 1, 1))
+			createBrush(point);
+	}
+
+	function findNearestPointIntersectingWith(from: Point, to: Point, bounds: Point[]) {
+		let minDistance = Number.MAX_VALUE;
+		let nearestPoint: Point = undefined;
+		for (let i = 0; i < bounds.length; i++) {
+			for (let j = i + 1; j < bounds.length; j++) {
+				// Skip diagonal
+				if (!(bounds[j].x == bounds[i].x || bounds[j].y == bounds[i].y))
+					continue;
+
+				const intersectionPoint = Global.lineLineIntersection(from, to, bounds[i], bounds[j]);
+				if (Number.isNaN(intersectionPoint.x))
+					continue;
+				const dist = intersectionPoint.distanceSquared(to);
+				if (dist < minDistance) {
+					minDistance = dist;
+					nearestPoint = intersectionPoint;
+				}
+			}
+		}
+		return nearestPoint;
+	}
+
+	function addPointOnLeave(e: MouseEvent): void {
+		mouseLeft = true;
+		if (!drawing)
+			return;
+
+		const point = new Point(e.clientX, e.clientY).toRectSpace(canvasByLayer[0].getBoundingClientRect());
+		const lastPoint = drawManager.getLastActionOfPlayer(Global.socket.id).data.point;
+
+		const bounds = [ new Point(0, 0.99999), new Point(0.99999, 0.99999), new Point(0.99999, 0), new Point(0, 0) ];
+		const nearestPoint = findNearestPointIntersectingWith(lastPoint, point, bounds);
+		if (nearestPoint !== undefined && nearestPoint.isInside(0, 0, 1, 1))
+			addPoint(nearestPoint);
 	}
 
 	function stopDrawing(e: MouseEvent): void {

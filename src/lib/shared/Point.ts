@@ -23,4 +23,8 @@ export default class Point {
 	toRectSpace(rect: DOMRect): Point {
 		return new Point((this.x - rect.left) / rect.width, (this.y - rect.top) / rect.height);
 	}
+
+	isInside(xMin: number, yMin: number, xMax: number, yMax: number) {
+		return !(this.x < xMin || this.y < yMin || this.x >= xMax || this.y >= yMax)
+	}
 }
