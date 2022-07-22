@@ -4,9 +4,11 @@
 	import Point from "../shared/Point";
 	import DrawManager from "../shared/drawcanvas/DrawManager";
 	import BrushPoint from "../shared/drawcanvas/BrushPoint";
+	import Fill from "../shared/drawcanvas/Fill";
 
-	export let canDraw = true;
+	export let canDraw = Math.random() < 0.5;
 	export let clientOnly = false;
+	export let multipleDrawers = false;
 
 	// 0 = main (layer 2), 1 = layer 1, 2 = sketch
 	let canvasByLayer: HTMLCanvasElement[] = [undefined, undefined, undefined];
@@ -18,10 +20,17 @@
 	let brushSize = 3;
 	let updateIntervalId: NodeJS.Timer;
 
+	// Only used in single drawer and not client only mode
+	let actionsRendered = 0;
+
 	// 0 = main (layer 2), 1 = layer 1, 2 = sketch
 	let selectedLayer = 0;
 
 	let drawManager = new DrawManager();
+
+	function selectFill() {
+		selectedTool = 'fill';
+	}
 
 	function selectBrush() {
 		selectedTool = 'brush';
@@ -76,9 +85,15 @@
 
 			// Triggered every server tick
 			Global.socket.on('serverUpdate', (data: any) => {
+				let needToRedraw = false;
+
 				for (const action of data) {
-					if (action.type != 'undo' && action.type != 'redo' && action.type != 'updateBrush')
+					if (action.type != 'undo' && action.type != 'redo' && action.type != 'updateBrush') {
+						let diff = drawManager.actions.length;
 						drawManager.clearUndoStack(action.requestedBy);
+						diff -= drawManager.actions.length;
+						actionsRendered -= diff;
+					}
 
 					if (action.type == 'createBrush') {
 						if (action.requestedBy == Global.socket.id) {
@@ -104,19 +119,36 @@
 						drawManager.moveLastToConfirmPosition();
 					}
 					else if (action.type == 'undo') {
-						if (action.requestedBy != Global.socket.id)
+						if (action.requestedBy != Global.socket.id) {
 							drawManager.undo(action.requestedBy, false);
+							needToRedraw = true;
+						}
 					}
 					else if (action.type == 'redo') {
-						if (action.requestedBy != Global.socket.id)
+						if (action.requestedBy != Global.socket.id) {
 							drawManager.redo(action.requestedBy, false);
+							needToRedraw = true;
+						}
 					}
 					else if (action.type == 'clear') {
-						if (action.requestedBy != Global.socket.id)
+						if (action.requestedBy != Global.socket.id) {
 							drawManager.clearActions(action.requestedBy, false);
+							needToRedraw = true;
+						}
+					}
+					else if (action.type == 'fill') {
+						if (action.requestedBy == Global.socket.id) {
+							drawManager.confirmAction();
+							continue;
+						}
+						const brushPoint = new Fill(new Point(action.data.point.x, action.data.point.y), action.data.color);
+						drawManager.createFill(action.requestedBy, brushPoint, action.data.layer, true, canvasByLayer[action.data.layer], contextByLayer[action.data.layer], false);
+						drawManager.moveLastToConfirmPosition();
 					}
 				}
-				if (data.length > 0)
+				if (needToRedraw || (data.length > 0 && multipleDrawers))
+					renderFull();
+				else if (data.length > 0 && !canDraw)
 					render();
 			});
 		}
@@ -144,9 +176,17 @@
 		}
 	})
 
+	function createFill(point: Point) {
+		const fill = new Fill(point, selectedColor);
+		drawManager.createFill(Global.socket.id, fill, selectedLayer, selectedLayer == 2, canvasByLayer[selectedLayer], contextByLayer[selectedLayer], selectedLayer != 2 && !clientOnly);
+	}
+
 	function onMouseDown(e: MouseEvent): void {
 		const point = new Point(e.clientX, e.clientY).toRectSpace(canvasByLayer[0].getBoundingClientRect());
-		createBrush(point);
+		if (selectedTool == 'brush' || selectedTool == 'eraser')
+			createBrush(point);
+		else if (selectedTool == 'fill')
+			createFill(point);
 		drawing = true;
 	}
 
@@ -163,46 +203,62 @@
 
 	function clearButton(): void {
 		drawManager.clearActions(Global.socket.id, !clientOnly);
-		render();
+		renderFull();
 	}
 
 	function undoButton(): void {
 		drawManager.undo(Global.socket.id, !clientOnly)
-		render();
+		renderFull();
 	}
 
 	function redoButton(): void {
 		drawManager.redo(Global.socket.id, !clientOnly)
-		render();
+		renderFull();
 	}
 
-	function render() {
-		drawBackground();
-
+	function renderFrom(start: number) {
 		const pathStartPerId = new Map<number, number>();
 		let currentId = -1;
-		for (let i = 0; i < drawManager.actions.length; i++) {
+
+		for (let i = start; i < drawManager.actions.length; i++) {
 			if (drawManager.actions[i].undone)
 				continue;
 
-			if (currentId != drawManager.actions[i].id) {
-				if (currentId != -1) {
-					const index = pathStartPerId.get(currentId);
-					drawManager.actions[index].data.render(contextByLayer[drawManager.actions[index].layer]);
-				}
-				currentId = drawManager.actions[i].id;
-				pathStartPerId.set(currentId, i);
+			if (currentId != drawManager.actions[i].id && currentId != -1) {
+				const index = pathStartPerId.get(currentId);
+				drawManager.actions[index].data.render(contextByLayer[drawManager.actions[index].layer]);
 			}
 
-			if (currentId == drawManager.actions[i].id) {
-				const index = pathStartPerId.get(currentId);
-				drawManager.actions[index].data.lineTo(canvasByLayer[drawManager.actions[index].layer], contextByLayer[drawManager.actions[index].layer], drawManager.actions[i].data.point);
+			if (drawManager.actions[i].type == 'brushPoint') {
+				if (currentId != drawManager.actions[i].id) {
+					const pathStartIndex = (start > 0 && drawManager.actions[start - 1].id == drawManager.actions[i].id) ? start - 1 : i;
+					currentId = drawManager.actions[pathStartIndex].id;
+					pathStartPerId.set(currentId, pathStartIndex);
+				} else {
+					const index = pathStartPerId.get(currentId);
+					drawManager.actions[index].data.lineTo(canvasByLayer[drawManager.actions[index].layer], contextByLayer[drawManager.actions[index].layer], drawManager.actions[i].data.point);
+				}
+			}
+			else if (drawManager.actions[i].type == 'fill') {
+				drawManager.actions[i].data.render(canvasByLayer[drawManager.actions[i].layer], contextByLayer[drawManager.actions[i].layer]);
 			}
 		}
+
 		if (currentId != -1) {
 			const index = pathStartPerId.get(currentId);
 			drawManager.actions[index].data.render(contextByLayer[drawManager.actions[index].layer]);
 		}
+	}
+
+	function renderFull() {
+		drawBackground();
+		renderFrom(0);
+		actionsRendered = drawManager.actions.length;
+	}
+
+	function render() {
+		renderFrom(actionsRendered);
+		actionsRendered = drawManager.actions.length;
 	}
 </script>
 
@@ -222,6 +278,9 @@
 		<button on:click={redoButton}>Redo</button>
 		<button on:click={selectBrush}>Brush</button>
 		<button on:click={selectEraser}>Eraser</button>
+		{#if !multipleDrawers}
+			<button on:click={selectFill}>Fill</button>
+		{/if}
 		<button on:click={selectSketchLayer}>Sketch</button>
 		<button on:click={selectLayer1}>Layer 1</button>
 		<button on:click={selectLayer2}>Layer 2</button>

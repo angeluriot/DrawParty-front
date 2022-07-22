@@ -2,6 +2,7 @@ import Global from "../global";
 import type Point from "../Point";
 import Action from "./Action";
 import BrushPoint from "./BrushPoint";
+import type Fill from "./Fill";
 
 export default class DrawManager {
 	readonly drawDistanceThreshold = 0.000006;
@@ -29,6 +30,23 @@ export default class DrawManager {
 				}
 			});
 		}
+	}
+
+	createFill(playerId: string, fill: Fill, layer: number, confirmed: boolean, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, sendToServer: boolean): void {
+		this.clearUndoStack(playerId);
+		this.actions.push(new Action('fill', fill, this.totalActions++, layer, confirmed, playerId));
+		if (sendToServer) {
+			this.actionsNotSent.push({
+				type: 'fill',
+				layer,
+				color: fill.color,
+				point: {
+					x: fill.point.x,
+					y: fill.point.y
+				}
+			});
+		}
+		fill.render(canvas, ctx);
 	}
 
 	getLastActionOfPlayer(playerId: string): Action {
