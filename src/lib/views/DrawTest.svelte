@@ -68,6 +68,77 @@
 		}
 	}
 
+	function initSocket() {
+		// Triggered every server tick
+		Global.socket.on('serverUpdate', (data: any) => {
+			let needToRedraw = false;
+
+			for (const action of data) {
+				if (action.type != 'undo' && action.type != 'redo' && action.type != 'updateBrush') {
+					let diff = drawManager.actions.length;
+					drawManager.clearUndoStack(action.requestedBy);
+					diff -= drawManager.actions.length;
+					actionsRendered -= diff;
+				}
+
+				if (action.type == 'createBrush') {
+					if (action.requestedBy == Global.socket.id) {
+						// Twice for the two points
+						drawManager.confirmAction();
+						drawManager.confirmAction();
+						continue;
+					}
+					const brushPoint = new BrushPoint(new Point(action.data.point.x, action.data.point.y), action.data.color, action.data.size, action.data.eraser);
+					drawManager.createBrush(action.requestedBy, brushPoint, action.data.layer, true, canvasByLayer[action.data.layer], contextByLayer[action.data.layer], false);
+					drawManager.moveLastToConfirmPosition();
+					drawManager.moveLastToConfirmPosition();
+				}
+				// Adds a point to the current path of the action's player
+				else if (action.type == 'updateBrush') {
+					if (action.requestedBy == Global.socket.id) {
+						drawManager.confirmAction();
+						continue;
+					}
+					const point = new Point(action.data.x, action.data.y);
+					const lastAction = drawManager.getLastActionOfPlayer(action.requestedBy);
+					drawManager.addPoint(lastAction, point, true, canvasByLayer[lastAction.layer], contextByLayer[lastAction.layer], false);
+					drawManager.moveLastToConfirmPosition();
+				}
+				else if (action.type == 'undo') {
+					if (action.requestedBy != Global.socket.id) {
+						drawManager.undo(action.requestedBy, false);
+						needToRedraw = true;
+					}
+				}
+				else if (action.type == 'redo') {
+					if (action.requestedBy != Global.socket.id) {
+						drawManager.redo(action.requestedBy, false);
+						needToRedraw = true;
+					}
+				}
+				else if (action.type == 'clear') {
+					if (action.requestedBy != Global.socket.id) {
+						drawManager.clearActions(action.requestedBy, false);
+						needToRedraw = true;
+					}
+				}
+				else if (action.type == 'fill') {
+					if (action.requestedBy == Global.socket.id) {
+						drawManager.confirmAction();
+						continue;
+					}
+					const brushPoint = new Fill(new Point(action.data.point.x, action.data.point.y), action.data.color);
+					drawManager.createFill(action.requestedBy, brushPoint, action.data.layer, true, canvasByLayer[action.data.layer], contextByLayer[action.data.layer], false);
+					drawManager.moveLastToConfirmPosition();
+				}
+			}
+			if (needToRedraw || (data.length > 0 && multipleDrawers))
+				renderFull();
+			else if (data.length > 0 && !canDraw)
+				render();
+		});
+	}
+
 	onMount(() => {
 		for (let i = 0; i < canvasByLayer.length; i++) {
 			canvasByLayer[i].width = width;
@@ -91,75 +162,7 @@
 
 		if (!clientOnly) {
 			updateIntervalId = setInterval(sendActionsToServer, 1 / 20 * 1000);
-
-			// Triggered every server tick
-			Global.socket.on('serverUpdate', (data: any) => {
-				let needToRedraw = false;
-
-				for (const action of data) {
-					if (action.type != 'undo' && action.type != 'redo' && action.type != 'updateBrush') {
-						let diff = drawManager.actions.length;
-						drawManager.clearUndoStack(action.requestedBy);
-						diff -= drawManager.actions.length;
-						actionsRendered -= diff;
-					}
-
-					if (action.type == 'createBrush') {
-						if (action.requestedBy == Global.socket.id) {
-							// Twice for the two points
-							drawManager.confirmAction();
-							drawManager.confirmAction();
-							continue;
-						}
-						const brushPoint = new BrushPoint(new Point(action.data.point.x, action.data.point.y), action.data.color, action.data.size, action.data.eraser);
-						drawManager.createBrush(action.requestedBy, brushPoint, action.data.layer, true, canvasByLayer[action.data.layer], contextByLayer[action.data.layer], false);
-						drawManager.moveLastToConfirmPosition();
-						drawManager.moveLastToConfirmPosition();
-					}
-					// Adds a point to the current path of the action's player
-					else if (action.type == 'updateBrush') {
-						if (action.requestedBy == Global.socket.id) {
-							drawManager.confirmAction();
-							continue;
-						}
-						const point = new Point(action.data.x, action.data.y);
-						const lastAction = drawManager.getLastActionOfPlayer(action.requestedBy);
-						drawManager.addPoint(lastAction, point, true, canvasByLayer[lastAction.layer], contextByLayer[lastAction.layer], false);
-						drawManager.moveLastToConfirmPosition();
-					}
-					else if (action.type == 'undo') {
-						if (action.requestedBy != Global.socket.id) {
-							drawManager.undo(action.requestedBy, false);
-							needToRedraw = true;
-						}
-					}
-					else if (action.type == 'redo') {
-						if (action.requestedBy != Global.socket.id) {
-							drawManager.redo(action.requestedBy, false);
-							needToRedraw = true;
-						}
-					}
-					else if (action.type == 'clear') {
-						if (action.requestedBy != Global.socket.id) {
-							drawManager.clearActions(action.requestedBy, false);
-							needToRedraw = true;
-						}
-					}
-					else if (action.type == 'fill') {
-						if (action.requestedBy == Global.socket.id) {
-							drawManager.confirmAction();
-							continue;
-						}
-						const brushPoint = new Fill(new Point(action.data.point.x, action.data.point.y), action.data.color);
-						drawManager.createFill(action.requestedBy, brushPoint, action.data.layer, true, canvasByLayer[action.data.layer], contextByLayer[action.data.layer], false);
-						drawManager.moveLastToConfirmPosition();
-					}
-				}
-				if (needToRedraw || (data.length > 0 && multipleDrawers))
-					renderFull();
-				else if (data.length > 0 && !canDraw)
-					render();
-			});
+			initSocket();
 		}
 	});
 
