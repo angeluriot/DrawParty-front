@@ -20,7 +20,7 @@ export default class BrushPoint {
 		ctx.lineCap = 'round';
 		ctx.lineJoin = 'round';
 		ctx.strokeStyle = this.color;
-		ctx.lineWidth = this.brushSize;
+		ctx.lineWidth = this.brushSize * canvas.height;
 		ctx.moveTo(this.point.x * canvas.width, this.point.y * canvas.height);
 		ctx.beginPath();
 		this.pathBegun = true;
@@ -46,7 +46,7 @@ export default class BrushPoint {
 		ctx.lineCap = 'round';
 		ctx.lineJoin = 'round';
 		ctx.strokeStyle = this.color;
-		ctx.lineWidth = this.brushSize;
+		ctx.lineWidth = this.brushSize * canvas.height;
 		ctx.beginPath();
 		ctx.moveTo(this.point.x * canvas.width, this.point.y * canvas.height);
 		ctx.lineTo(otherPoint.point.x * canvas.width, otherPoint.point.y * canvas.height);
