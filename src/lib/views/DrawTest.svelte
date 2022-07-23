@@ -9,6 +9,8 @@
 	export let canDraw = true;
 	export let clientOnly = false;
 	export let multipleDrawers = true;
+	export let ratio = 1.0;
+	export let width = 800;
 
 	// 0 = main (layer 2), 1 = layer 1, 2 = sketch
 	let canvasByLayer: HTMLCanvasElement[] = [undefined, undefined, undefined];
@@ -62,18 +64,21 @@
 
 	function sendActionsToServer() {
 		if (drawManager.actionsNotSent.length > 0) {
-			Global.socket.emit('clientUpdate', drawManager.actionsNotSent);
-			drawManager.actionsNotSent.length = 0;
+			Global.socket.emit('clientUpdate', drawManager.actionsNotSent.splice(0, 50));
 		}
 	}
 
 	onMount(() => {
-		for (let i = 0; i < canvasByLayer.length; i++)
+		for (let i = 0; i < canvasByLayer.length; i++) {
+			canvasByLayer[i].width = width;
+			canvasByLayer[i].height = width / ratio;
 			contextByLayer[i] = canvasByLayer[i].getContext("2d");
+		}
 
 		// Anti-aliasing
-		for (let i = 0; i < contextByLayer.length; i++)
+		for (let i = 0; i < contextByLayer.length; i++) {
 			contextByLayer[i].translate(0.5, 0.5);
+		}
 		drawBackground();
 
 		if (canDraw) {
@@ -207,7 +212,6 @@
 	}
 
 	function newPathOnEnter(e: MouseEvent): void {
-		console.log('entered');
 		mouseLeft = false;
 		if (!drawing)
 			return;
@@ -324,9 +328,9 @@
 
 <section>
 	<div class="canvas-wrapper">
-		<canvas class="sketch" bind:this={canvasByLayer[2]} width="800" height="600"></canvas>
-		<canvas bind:this={canvasByLayer[1]} width="800" height="600"></canvas>
-		<canvas bind:this={canvasByLayer[0]} width="800" height="600"></canvas>
+		<canvas class="sketch" bind:this={canvasByLayer[2]}></canvas>
+		<canvas class="above" bind:this={canvasByLayer[1]}></canvas>
+		<canvas class="above" bind:this={canvasByLayer[0]}></canvas>
 	</div>
 
 	{#if canDraw}
@@ -351,18 +355,18 @@
 	div.canvas-wrapper {
 		position: relative;
 		background-color: white;
-		width: 800px;
-		height: 600px;
 		margin: auto;
 	}
 
-	canvas {
+	canvas.above {
 		position: absolute;
-		top: 0%;
-		left: 0%;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
 	}
 
 	canvas.sketch {
+		position: relative;
 		opacity: 0.5;
 	}
 
